@@ -1,3 +1,10 @@
+---
+owns: [src/**]
+status: current
+---
+
+<!-- ctx: allow command-grade -->
+
 # ctx - Specification v1
 
 > Working name. The system keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.
@@ -280,6 +287,8 @@ Two passes. **Both ship in v1.** This is agentic docs-as-code; a purely mechanic
 | `doc-staleness` | A doc whose `owns:` paths have commits newer than the doc's last commit |
 | `state-budget` | State exceeds its token budget |
 | `note-stale` | A note has been `open` past 30 days |
+
+A doc that must quote command-grade facts as examples (a spec, a style guide) opts out of `command-grade-misplaced` for the whole file with the comment `<!-- ctx: allow command-grade -->` near the top. It is an escape hatch, not a convention.
 
 **Do not check duplicated file paths.** Two docs citing the same source file while stating different facts about it is correct. Measured precision: ~43% on paths, ~100% on the strong classes (env var, port, command, URL, model). See §15.
 

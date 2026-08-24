@@ -39,7 +39,7 @@ The server has no model. Judgment work (the agent pass of `ctx_check`, the init 
 ## Storage
 
 - Repo: `docs/` only, including `docs/ctx.json` for command-grade facts.
-- Managed: `~/.ctx/<slug>-<hash>/` with `state.md`, `notes/`, `settings.json`. Keyed by normalized remote URL so worktrees share one store; `CTX_HOME` overrides the root.
+- Managed: `~/.ctx/<slug>-<hash>/` with `state.md`, `notes/`, `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in ctx.json) relocates the root.
 
 ## Docs index
 

@@ -26,8 +26,12 @@ const COMMAND_GRADE: { cls: string; re: RegExp }[] = [
 const ENV_ALLOW = new Set(["README_MD", "CLAUDE_MD", "AGENTS_MD", "CI_CD", "UI_UX"]);
 const DOC_URL_HOSTS = /^https?:\/\/(?:[\w-]+\.)*(?:github\.com|docs\.[\w.-]+|developer\.[\w.-]+|[\w-]+\.dev|wikipedia\.org|npmjs\.com|readthedocs\.io)\b/;
 
+/** Per-file opt-out for docs that quote command-grade facts as examples (a spec, a style guide). */
+export const ALLOW_MARKER = "<!-- ctx: allow command-grade -->";
+
 export function commandGradeHits(text: string): { line: number; cls: string; token: string }[] {
   const hits: { line: number; cls: string; token: string }[] = [];
+  if (text.includes(ALLOW_MARKER)) return hits;
   let inFence = false;
   text.split("\n").forEach((raw, i) => {
     if (/^\s*```/.test(raw)) { inFence = !inFence; return; }
@@ -37,7 +41,7 @@ export function commandGradeHits(text: string): { line: number; cls: string; tok
       // inline code: a command inside backticks mid-sentence still counts
       if (!m && cls === "shell command") for (const seg of line.matchAll(/`([^`]+)`/g)) { m = seg[1].match(re); if (m) break; }
       if (!m) continue;
-      const token = m[0].trim();
+      const token = cls === "shell command" ? (m.input ?? m[0]).trim().slice(0, 40) : m[0].trim();
       if (cls === "env var" && (ENV_ALLOW.has(token) || /^[A-Z]+_MD$/.test(token))) continue;
       if (cls === "service URL" && DOC_URL_HOSTS.test(token)) continue;
       hits.push({ line: i + 1, cls, token });

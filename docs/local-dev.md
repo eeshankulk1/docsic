@@ -13,7 +13,7 @@ Install, build, test. The build emits `dist/`, which is what the `ctx` bin and e
 
 ## Exercising the tools without a harness
 
-The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at another repo by running from inside it; the managed store is resolved from that repo's remote. Set `CTX_HOME` to a scratch directory to keep experiments out of your real store.
+The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at another repo by running from inside it; the managed store is resolved from that repo's remote. Point the store override (named in ctx.json) at a scratch directory to keep experiments out of your real store.
 
 ## Hooks
 
@@ -21,5 +21,5 @@ The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at anot
 
 ## Gotchas
 
-- Tests create real git repos in the OS temp dir and set `CTX_HOME` per test; they never touch `~/.ctx`.
+- Tests create real git repos in the OS temp dir and redirect the managed store per test; they never touch your real store.
 - `doc-staleness` compares commit timestamps, so an uncommitted doc edit does not clear the warning until committed.

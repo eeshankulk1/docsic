@@ -58,7 +58,7 @@ export function mdLinks(body: string): { target: string; line: number }[] {
 export function hubIndexTargets(hub: Doc): Set<string> {
   const set = new Set<string>();
   for (const { target } of mdLinks(hub.body)) set.add(target.replace(/^\.\//, ""));
-  // bare backticked references: any .md, plus the two lifecycle dirs
-  for (const m of hub.body.matchAll(/`([\w./-]+\.md|plans\/|reference\/)`/g)) set.add(m[1]);
+  // index rows are links; the two lifecycle dirs may also be cited bare
+  for (const m of hub.body.matchAll(/`(plans\/|reference\/)`/g)) set.add(m[1]);
   return set;
 }

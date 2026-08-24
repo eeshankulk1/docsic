@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -26,21 +26,34 @@ export function normalizeRemote(url: string): string {
   return u;
 }
 
+function identityFor(key: string, slug: string): string {
+  const hash = createHash("sha1").update(key).digest("hex").slice(0, 12);
+  return `${slug || "repo"}-${hash}`;
+}
+
+function localIdentity(root: string): string {
+  return identityFor(`local:${resolve(root)}`, root.split("/").pop() || "repo");
+}
+
 export function repoIdentity(root: string): string {
   const remote = git(root, ["remote", "get-url", "origin"]);
-  const key = remote ? normalizeRemote(remote) : `local:${resolve(root)}`;
-  const hash = createHash("sha1").update(key).digest("hex").slice(0, 12);
-  const slug = (remote ? key.split("/").pop() : root.split("/").pop()) || "repo";
-  return `${slug}-${hash}`;
+  if (!remote) return localIdentity(root);
+  const key = normalizeRemote(remote);
+  return identityFor(key, key.split("/").pop() || "repo");
 }
 
 export function managedRoot(): string {
   return process.env.CTX_HOME || join(homedir(), ".ctx");
 }
 
+/** Resolves the store; when a remote appears after a path-keyed store was created, the store moves with it. */
 export function managedDir(root: string): string {
   const dir = join(managedRoot(), repoIdentity(root));
-  if (!existsSync(dir)) mkdirSync(join(dir, "notes"), { recursive: true });
+  if (!existsSync(dir)) {
+    const old = join(managedRoot(), localIdentity(root));
+    if (old !== dir && existsSync(old)) renameSync(old, dir);
+    else mkdirSync(join(dir, "notes"), { recursive: true });
+  }
   return dir;
 }
 

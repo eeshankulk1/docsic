@@ -31,3 +31,17 @@ describe("repo identity", () => {
     expect(normalizeRemote("ssh://git@github.com/eesh/ctx.git/")).toBe(a);
   });
 });
+
+describe("managed store re-keying", () => {
+  it("moves a path-keyed store when a remote appears", async () => {
+    const { execFileSync } = await import("node:child_process");
+    const { managedDir } = await import("../src/core/repo.js");
+    const root = tmpRepo();
+    writeState(root, "## Now\na\n## In flight\nb\n## Next\nc\n");
+    const before = managedDir(root);
+    execFileSync("git", ["remote", "add", "origin", "git@github.com:x/y.git"], { cwd: root });
+    const after = managedDir(root);
+    expect(after).not.toBe(before);
+    expect(readState(root)).toContain("## Now");
+  });
+});

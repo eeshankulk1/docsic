@@ -53,7 +53,7 @@ export function createServer(): McpServer {
   }, async ({ cwd, apply: doApply, projectName }) => {
     const root = findRepoRoot(cwd);
     const t = triage(root);
-    if (!doApply) return text({ preview: true, triage: t, next: "Show the user one summary table and get one confirmation, then call ctx_init with apply=true. Work on a branch; the branch is the undo." });
+    if (!doApply) return text({ preview: true, triage: t, wouldCreate: ["docs/architecture.md", "docs/ctx.json", "AGENTS.md"], next: "Show the user one summary table and get one confirmation, then call ctx_init with apply=true. Work on a branch; the branch is the undo." });
     const r = apply(root, t, { projectName });
     return text({ applied: r, flagged: t.flagged, rubric: agentRubric(root, t, r) });
   });

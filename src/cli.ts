@@ -53,13 +53,16 @@ async function main(): Promise<void> {
       if (t.readmeIsArchitecture) console.log("README.md reads as an architecture doc - the agent will move its substance into docs/architecture.md");
       for (const f of t.flagged) console.log(`flagged: ${f}`);
       for (const a of t.ambiguous) console.log(`ambiguous (not moved): ${a}`);
-      if (!flags.has("--yes") && t.moves.length) {
-        console.log("\nre-run with --yes to apply, on a branch (the branch is the undo).");
+      if (!flags.has("--yes")) {
+        console.log(`\nwould create: ${["docs/architecture.md", "docs/ctx.json", "AGENTS.md", "CLAUDE.md -> AGENTS.md"].filter(f => !existsSync(join(root, f.split(" ")[0]))).join(", ") || "nothing"}`);
+        console.log("re-run with --yes to apply, on a branch (the branch is the undo).");
         return;
       }
       const r = apply(root, t);
       for (const m of r.moved) console.log(`moved   ${m}`);
       for (const c of r.created) console.log(`created ${c}`);
+      const findings = runMechanicalChecks(root);
+      if (findings.length) console.log(`\nctx check: ${findings.length} findings on the existing docs (run \`ctx check\` for the list)`);
       console.log("\n" + agentRubric(root, t, r));
       return;
     }

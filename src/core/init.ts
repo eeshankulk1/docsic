@@ -179,13 +179,18 @@ Start at \`docs/architecture.md\` - it indexes every doc. Exact commands, ports 
 
 /** What the calling agent does after apply(): the server has no model (spec §9). */
 export function agentRubric(root: string, t: Triage, r: ApplyResult): string {
-  return `## Your job now (ctx has no model - this part is yours)
-
-1. Fill docs/ctx.json with every command-grade fact you can verify by reading the repo: test/build commands per stack, dev server command + port, env var names (not values), service URLs, model IDs. Run each command once; record only what works.
-2. Write docs/architecture.md (hub: what exists and how it relates; index every doc), docs/local-dev.md and docs/deployment.md. Add api.md / frontend.md / data-flow.md / worker.md / ios.md only if the project has that surface. Each doc gets frontmatter: owns: [globs of the code it describes], status: current. No ports, commands, env var names or URLs in prose - point at ctx.json.
-${t.readmeIsArchitecture ? "3. README.md is an architecture document. Move its substance into docs/architecture.md and rewrite README.md as a real README: what it is, a pointer to docs/, nothing version-volatile.\n" : ""}${t.ambiguous.length ? `4. Decide these ambiguous markdown files (listed, not moved): ${t.ambiguous.join(", ")}. Each becomes a plan (status: done), a reference, part of a doc, or stays.\n` : ""}
-5. While writing, keep a DEFECT LIST: every claim you tried to verify and found false or broken - dead test config, hardcoded values, artifacts committed by mistake, READMEs describing a stack the project no longer uses. Report it verbatim at the end; it is the most valuable output of init.
-6. Run ctx_check and fix every finding. Then ctx_save state (## Now / ## In flight / ## Next, under 800 tokens).
-
-Work is on the current branch; review the diff before committing. Nothing was deleted.`;
+  const hasDocs = t.existingDocs.length > 0;
+  const steps = [
+    hasDocs
+      ? "docs/ already exists. Reconcile rather than rewrite: read docs/architecture.md, then move every command-grade fact (commands, ports, env var names, service URLs, model IDs) out of prose into docs/ctx.json, and add frontmatter to each narrative doc: owns: [globs of the code it describes], status: current."
+      : "Fill docs/ctx.json with every command-grade fact you can verify by reading the repo: test/build commands per stack, dev server command + port, env var names (not values), service URLs, model IDs. Run each command once; record only what works.",
+    hasDocs
+      ? null
+      : "Write docs/architecture.md (hub: what exists and how it relates; index every doc), docs/local-dev.md and docs/deployment.md. Add api.md / frontend.md / data-flow.md / worker.md / ios.md only if the project has that surface. Each doc gets frontmatter: owns: [globs], status: current. No ports, commands, env var names or URLs in prose - point at ctx.json.",
+    t.readmeIsArchitecture ? "README.md is an architecture document. Move its substance into docs/architecture.md and rewrite README.md as a real README: what it is, a pointer to docs/, nothing version-volatile." : null,
+    t.ambiguous.length ? `Decide these ambiguous markdown files (listed, not moved): ${t.ambiguous.join(", ")}. Each becomes a plan (status: done), a reference, part of a doc, or stays.` : null,
+    "While writing, keep a DEFECT LIST: every claim you tried to verify and found false or broken - dead test config, hardcoded values, artifacts committed by mistake, READMEs describing a stack the project no longer uses. Report it verbatim at the end; it is the most valuable output of init.",
+    "Run ctx_check and fix every finding. Then ctx_save state (## Now / ## In flight / ## Next, under 800 tokens).",
+  ].filter((s): s is string => !!s);
+  return `## Your job now (ctx has no model - this part is yours)\n\n${steps.map((s, i) => `${i + 1}. ${s}`).join("\n")}\n\nWork is on the current branch; review the diff before committing. Nothing was deleted.`;
 }

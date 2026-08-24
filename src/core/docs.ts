@@ -31,6 +31,7 @@ export function listDocs(root: string): Doc[] {
       let kind: Doc["kind"] = "other";
       if (rel === HUB) kind = "hub";
       else if (rel === CONFIG) kind = "config";
+      else if (/^(plans|reference)\/README\.md$/.test(rel)) kind = "other"; // describes its directory
       else if (rel.startsWith("plans/") && isMd) kind = "plan";
       else if (rel.startsWith("reference/")) kind = "reference";
       else if (isMd && !rel.includes("/")) kind = "narrative";

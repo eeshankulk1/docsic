@@ -1,0 +1,9 @@
+{
+  "updated": "2026-08-23",
+  "stacks": [
+    { "name": "ctx", "dir": ".", "runner": "vitest", "testCommand": "npx vitest run", "buildCommand": "npm run build" }
+  ],
+  "lifecycle": { "startAll": "npm run build && node dist/cli.js serve" },
+  "env": { "ctx": { "file": null, "required": [], "optional": ["CTX_HOME"] } },
+  "notes": "Tests set CTX_HOME per test; never run the suite with CTX_HOME pointing at your real ~/.ctx."
+}

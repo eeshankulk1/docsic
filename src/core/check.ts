@@ -63,6 +63,7 @@ export function runMechanicalChecks(root: string): Finding[] {
     const has = (rel: string) => targets.has(rel) || targets.has(`./${rel}`);
     for (const d of docs) {
       if (d.kind === "hub" || d.kind === "config" || !d.rel.endsWith(".md")) continue;
+      if (d.kind === "other" && d.rel.includes("/")) continue; // a dir README is covered by the dir's row
       if (d.kind === "plan") { if (!has("plans/") && !has("plans")) findings.push(idx("plans/")); continue; }
       if (d.kind === "reference") { if (!has("reference/") && !has("reference")) findings.push(idx("reference/")); continue; }
       if (!has(d.rel)) findings.push(idx(d.rel));

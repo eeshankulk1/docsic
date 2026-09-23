@@ -19,7 +19,7 @@ describe("mechanical checks", () => {
     write(root, "docs/architecture.md", HUB);
     write(root, "docs/local-dev.md", "---\nowns: [src/**]\nstatus: current\n---\n# Dev\nRedis is required; the worker will not start without it.\n");
     write(root, "docs/plans/2026-01-01-thing.md", "---\nstatus: done\ndate: 2026-01-01\n---\n# plan\n");
-    write(root, "docs/ctx.json", "{}");
+    write(root, "docs/docsic.json", "{}");
     commit(root);
     expect(runMechanicalChecks(root)).toEqual([]);
   });

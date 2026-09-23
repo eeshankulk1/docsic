@@ -14,7 +14,8 @@ export interface Doc {
 }
 
 export const HUB = "architecture.md";
-export const CONFIG = "ctx.json";
+export const CONFIG = "docsic.json";
+export const LEGACY_CONFIG = "ctx.json";
 
 export function listDocs(root: string): Doc[] {
   const dir = docsDir(root);
@@ -30,7 +31,7 @@ export function listDocs(root: string): Doc[] {
       const { data, body } = isMd ? parseFrontmatter(raw) : { data: {}, body: raw };
       let kind: Doc["kind"] = "other";
       if (rel === HUB) kind = "hub";
-      else if (rel === CONFIG) kind = "config";
+      else if (rel === CONFIG || rel === LEGACY_CONFIG) kind = "config";
       else if (/^(plans|reference)\/README\.md$/.test(rel)) kind = "other"; // describes its directory
       else if (rel.startsWith("plans/") && isMd) kind = "plan";
       else if (rel.startsWith("reference/")) kind = "reference";

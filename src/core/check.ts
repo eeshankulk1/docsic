@@ -27,7 +27,7 @@ const ENV_ALLOW = new Set(["README_MD", "CLAUDE_MD", "AGENTS_MD", "CI_CD", "UI_U
 const DOC_URL_HOSTS = /^https?:\/\/(?:[\w-]+\.)*(?:github\.com|docs\.[\w.-]+|developer\.[\w.-]+|[\w-]+\.dev|wikipedia\.org|npmjs\.com|readthedocs\.io)\b/;
 
 /** Per-file opt-out for docs that quote command-grade facts as examples (a spec, a style guide). */
-export const ALLOW_MARKER = "<!-- ctx: allow command-grade -->";
+export const ALLOW_MARKER = "<!-- docsic: allow command-grade -->";
 
 export function commandGradeHits(text: string): { line: number; cls: string; token: string }[] {
   const hits: { line: number; cls: string; token: string }[] = [];

@@ -41,28 +41,32 @@ export function register(h: Harness): HarnessReport {
   if (h === "claude-code") {
     const p = join(home, ".claude.json");
     const j = readJson(p);
-    j.mcpServers = { ...(j.mcpServers ?? {}), ctx: { type: "stdio", ...SERVER } };
+    j.mcpServers = { ...(j.mcpServers ?? {}), docsic: { type: "stdio", ...SERVER } };
+    delete j.mcpServers.ctx; // pre-rename registration
     writeJson(p, j);
     const hooks = installClaudeHooks(join(home, ".claude", "settings.json"));
-    return { harness: h, registered: true, hooks, detail: `~/.claude.json mcpServers.ctx; hooks in ~/.claude/settings.json` };
+    return { harness: h, registered: true, hooks, detail: `~/.claude.json mcpServers.docsic; hooks in ~/.claude/settings.json` };
   }
   if (h === "codex") {
     const p = join(home, ".codex", "config.toml");
     let toml = existsSync(p) ? readFileSync(p, "utf8") : "";
-    if (!/\[mcp_servers\.ctx\]/.test(toml)) {
-      toml += `\n[mcp_servers.ctx]\ncommand = "node"\nargs = [${SERVER.args.map(a => JSON.stringify(a)).join(", ")}]\n`;
+    const legacy = /\n?\[mcp_servers\.ctx\]\n(?:(?!\[)[^\n]*\n?)*/;
+    if (legacy.test(toml)) { toml = toml.replace(legacy, "\n"); writeFileSync(p, toml); }
+    if (!/\[mcp_servers\.docsic\]/.test(toml)) {
+      toml += `\n[mcp_servers.docsic]\ncommand = "node"\nargs = [${SERVER.args.map(a => JSON.stringify(a)).join(", ")}]\n`;
       mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, toml);
     }
-    return { harness: h, registered: true, hooks: false, detail: "~/.codex/config.toml [mcp_servers.ctx]" };
+    return { harness: h, registered: true, hooks: false, detail: "~/.codex/config.toml [mcp_servers.docsic]" };
   }
   const p = join(home, ".cursor", "mcp.json");
   const j = readJson(p);
-  j.mcpServers = { ...(j.mcpServers ?? {}), ctx: SERVER };
+  j.mcpServers = { ...(j.mcpServers ?? {}), docsic: SERVER };
+  delete j.mcpServers.ctx;
   writeJson(p, j);
-  return { harness: h, registered: true, hooks: false, detail: "~/.cursor/mcp.json mcpServers.ctx" };
+  return { harness: h, registered: true, hooks: false, detail: "~/.cursor/mcp.json mcpServers.docsic" };
 }
 
-/** SessionStart injects ctx load; Stop runs the repair gate once per session. Idempotent. */
+/** SessionStart injects docsic load; Stop runs the repair gate once per session. Idempotent. */
 function installClaudeHooks(settingsPath: string): boolean {
   const s = readJson(settingsPath);
   s.hooks = s.hooks ?? {};
@@ -72,8 +76,11 @@ function installClaudeHooks(settingsPath: string): boolean {
     ["Stop", `node ${cli} hook stop`],
   ];
   for (const [event, command] of entries) {
-    const list: any[] = s.hooks[event] ?? [];
-    const already = list.some(e => (e.hooks ?? []).some((h: any) => String(h.command).includes("ctx") && String(h.command).includes("hook")));
+    // Drop pre-rename ctx hooks, then add ours unless something already runs `docsic ... hook`.
+    const list: any[] = (s.hooks[event] ?? [])
+      .map((e: any) => ({ ...e, hooks: (e.hooks ?? []).filter((h: any) => !/ctx\/dist\/cli\.js"? hook /.test(String(h.command))) }))
+      .filter((e: any) => e.hooks.length);
+    const already = list.some(e => e.hooks.some((h: any) => /docsic.* hook /.test(String(h.command))));
     if (!already) list.push({ hooks: [{ type: "command", command, timeout: 30 }] });
     s.hooks[event] = list;
   }

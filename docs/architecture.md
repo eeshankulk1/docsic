@@ -3,7 +3,7 @@ owns: [src/**]
 status: current
 ---
 
-# ctx - Architecture
+# docsic - Architecture
 
 A CLI + MCP server that keeps a codebase legible to coding agents and keeps that legibility true as the code changes. The full design is in [spec.md](spec.md); this doc is the map of the implementation.
 
@@ -11,10 +11,10 @@ A CLI + MCP server that keeps a codebase legible to coding agents and keeps that
 
 Two entry points over one core:
 
-- `ctx serve` - stdio MCP server exposing five tools: `ctx_load`, `ctx_recall`, `ctx_init`, `ctx_check`, `ctx_save`. The interface every session uses.
-- `ctx <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `hook` is the Claude Code hook entry.
+- `docsic serve` - stdio MCP server exposing five tools: `docsic_load`, `docsic_recall`, `docsic_init`, `docsic_check`, `docsic_save`. The interface every session uses.
+- `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `hook` is the Claude Code hook entry.
 
-The server has no model. Judgment work (the agent pass of `ctx_check`, the init defect list, distilling state) is returned to the calling agent as material plus a rubric.
+The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list, distilling state) is returned to the calling agent as material plus a rubric.
 
 ## Repo layout
 
@@ -27,7 +27,7 @@ The server has no model. Judgment work (the agent pass of `ctx_check`, the init 
 | `src/core/frontmatter.ts` | Minimal YAML-subset frontmatter parser and serializer |
 | `src/core/check.ts` | Mechanical rules and the command-grade token detector |
 | `src/core/memory.ts` | State (budgeted) and notes (open/absorbed) in the managed store |
-| `src/core/config.ts` | `docs/ctx.json` read/write |
+| `src/core/config.ts` | `docs/docsic.json` read/write |
 | `src/core/settings.ts` | Per-user adapter choices (managed, never in the repo) |
 | `src/core/tracker.ts` | Tracker adapter: `github` via the gh CLI, `none` |
 | `src/core/load.ts` | Assembles the session-start payload |
@@ -38,8 +38,8 @@ The server has no model. Judgment work (the agent pass of `ctx_check`, the init 
 
 ## Storage
 
-- Repo: `docs/` only, including `docs/ctx.json` for command-grade facts.
-- Managed: `~/.ctx/<slug>-<hash>/` with `state.md`, `notes/`, `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in ctx.json) relocates the root.
+- Repo: `docs/` only, including `docs/docsic.json` for command-grade facts.
+- Managed: `~/.docsic/<slug>-<hash>/` with `state.md`, `notes/`, `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in docsic.json) relocates the root.
 
 ## Docs index
 
@@ -49,4 +49,4 @@ The server has no model. Judgment work (the agent pass of `ctx_check`, the init 
 | [local-dev.md](local-dev.md) | Clone-to-running, how to exercise the server and hooks locally |
 | [deployment.md](deployment.md) | Publishing to npm and what `init` writes on a user's machine |
 
-Exact commands live in [ctx.json](ctx.json).
+Exact commands live in [docsic.json](docsic.json).

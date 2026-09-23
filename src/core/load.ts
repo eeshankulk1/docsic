@@ -37,11 +37,11 @@ export function load(root: string): LoadPayload {
     queue: settings.tracker === "none" ? [] : tracker(root, settings).listOpen(),
     findings,
     instructions: [
-      docs.length ? "Start at docs/architecture.md; it indexes every doc. Exact commands, ports and env vars are in docs/ctx.json - never in prose." : "No docs/ yet. Run ctx_init.",
+      docs.length ? "Start at docs/architecture.md; it indexes every doc. Exact commands, ports and env vars are in docs/docsic.json - never in prose." : "No docs/ yet. Run docsic_init.",
       "Plans with status done|superseded and docs with status superseded are history, not current truth.",
-      `Before claiming a task done: run ctx_check and fix what it reports, then ctx_save state (budget ${STATE_BUDGET} tokens, sections ## Now / ## In flight / ## Next).`,
-      hasHooks ? "" : "This harness has no session-end hook: ctx_save is the only way state gets written. Do it before you stop.",
-      "Learned something the hard way that fits no doc? ctx_save a note. Absorb notes once their content reaches a permanent home.",
+      `Before claiming a task done: run docsic_check and fix what it reports, then docsic_save state (budget ${STATE_BUDGET} tokens, sections ## Now / ## In flight / ## Next).`,
+      hasHooks ? "" : "This harness has no session-end hook: docsic_save is the only way state gets written. Do it before you stop.",
+      "Learned something the hard way that fits no doc? docsic_save a note. Absorb notes once their content reaches a permanent home.",
     ].filter(Boolean).join("\n"),
   };
 }

@@ -2,6 +2,23 @@
   "name": "docsic",
   "version": "0.1.0",
   "description": "Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.",
+  "keywords": [
+    "mcp",
+    "claude-code",
+    "codex",
+    "cursor",
+    "coding-agents",
+    "documentation",
+    "agent-memory"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eeshankulk1/docsic.git"
+  },
+  "homepage": "https://github.com/eeshankulk1/docsic#readme",
+  "bugs": {
+    "url": "https://github.com/eeshankulk1/docsic/issues"
+  },
   "type": "module",
   "bin": {
     "docsic": "./dist/cli.js"

@@ -2,7 +2,7 @@
 
 Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.
 
-One command: `npx docsic init`. It registers an MCP server with every coding agent on your machine, then initializes the repo: loose agent-written markdown becomes dated history, captured payloads get filed, and a `docs/` tree with a real index is scaffolded. From then on every session loads state, checks the docs against the code, and repairs drift before claiming work done.
+One command: `npx @eeshkulk/docsic init`. It registers an MCP server with every coding agent on your machine, then initializes the repo: loose agent-written markdown becomes dated history, captured payloads get filed, and a `docs/` tree with a real index is scaffolded. From then on every session loads state, checks the docs against the code, and repairs drift before claiming work done.
 
 Docs are for people and live in your repo. Everything else is for the agent and lives outside it.
 

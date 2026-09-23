@@ -17,7 +17,7 @@ const args = rest.filter(a => !a.startsWith("--"));
 
 const HELP = `docsic - keeps a codebase legible to coding agents
 
-  npx docsic init [--yes]    register with every coding agent on this machine, then initialize this repo
+  npx @eeshkulk/docsic init [--yes]  register with every coding agent on this machine, then initialize this repo
   docsic check [--json]      mechanical checks (exit 1 on errors; use in CI for a hard gate)
   docsic load                the session-start payload, as JSON
   docsic recall <query>      search docs, notes, hub (--hub: every hub project only)

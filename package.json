@@ -1,5 +1,5 @@
 {
-  "name": "docsic",
+  "name": "@eeshkulk/docsic",
   "version": "0.1.0",
   "description": "Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.",
   "keywords": [
@@ -21,7 +21,7 @@
   },
   "type": "module",
   "bin": {
-    "docsic": "./dist/cli.js"
+    "docsic": "dist/cli.js"
   },
   "files": [
     "dist"

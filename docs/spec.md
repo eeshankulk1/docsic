@@ -18,7 +18,7 @@ Status: draft, 2026-08-23. Derived from the docs-standard v2 rollout across thro
 One command, ever:
 
 ```
-npx docsic init
+npx @eeshkulk/docsic init
 ```
 
 Run it in a repo. On first use it installs itself and registers with every coding agent on the machine that supports MCP - Claude Code, Codex, Cursor, whatever is there - then initializes the repo. In every repo after that, it just initializes.
@@ -27,7 +27,7 @@ The user never writes an MCP config line, a `.gitignore` entry, a CI step, or a 
 
 **Why the CLI is the install and MCP is the runtime.** Every MCP server with a clean one-line install is a *remote* server - it runs on the vendor's infrastructure and you register a URL. docsic reads and writes files in your repo, so it must run locally over stdio, and stdio registration is verbose by nature. Rather than hand the user that string, the CLI writes it for them. MCP remains the interface every session actually uses (§9); the CLI exists only so the install is one short line.
 
-**Naming affects this.** The install string is mostly the package name, so it should be short and actually available on npm. The working name `ctx` was taken; the package ships as `docsic`, and the bin, MCP server name, tool prefix (`docsic_*`), config (`docs/docsic.json`) and managed store (`~/.docsic`) all match. Pre-rename installs are adopted: a `docs/ctx.json` is still read, `~/.ctx` is moved to `~/.docsic` on first use, and `init` replaces old `ctx` registrations.
+**Naming affects this.** The install string is mostly the package name, so it should be short and actually available on npm. The working name `ctx` was taken on npm and bare `docsic` was rejected by npm's typosquat filter (too close to `doctoc`), so the package ships scoped as `@eeshkulk/docsic`; the bin is `docsic`, and the bin, MCP server name, tool prefix (`docsic_*`), config (`docs/docsic.json`) and managed store (`~/.docsic`) all match. Pre-rename installs are adopted: a `docs/ctx.json` is still read, `~/.ctx` is moved to `~/.docsic` on first use, and `init` replaces old `ctx` registrations.
 
 ## 2. What this is not
 

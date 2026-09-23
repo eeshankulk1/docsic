@@ -43,7 +43,12 @@ export function repoIdentity(root: string): string {
 }
 
 export function managedRoot(): string {
-  return process.env.CTX_HOME || join(homedir(), ".ctx");
+  if (process.env.DOCSIC_HOME) return process.env.DOCSIC_HOME;
+  const root = join(homedir(), ".docsic");
+  // Pre-rename store (the package was called ctx): adopt it once.
+  const legacy = join(homedir(), ".ctx");
+  if (!existsSync(root) && existsSync(legacy)) renameSync(legacy, root);
+  return root;
 }
 
 /** Resolves the store; when a remote appears after a path-keyed store was created, the store moves with it. */

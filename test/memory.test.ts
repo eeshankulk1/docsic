@@ -45,3 +45,24 @@ describe("managed store re-keying", () => {
     expect(readState(root)).toContain("## Now");
   });
 });
+
+describe("hub-backed memory", () => {
+  it("writes state and notes into the hub project folder the repo maps to", async () => {
+    const { mkdtempSync, mkdirSync, readFileSync, renameSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const repos = mkdtempSync(join(tmpdir(), "docsic-repos-"));
+    const hubRoot = join(repos, "brain");
+    mkdirSync(join(hubRoot, "projects", "shop"), { recursive: true });
+    const root = tmpRepo();
+    const repo = join(repos, "Shop.ai");
+    renameSync(root, repo);
+    writeFileSync(join(process.env.DOCSIC_HOME!, "config.json"), JSON.stringify({
+      hub: { root: hubRoot, reposRoot: repos, sync: "none", overrides: { shop: { repoDir: "Shop.ai", aliases: ["shop.ai"] } } },
+    }));
+    writeState(repo, "## Now\nhub\n## In flight\n## Next\n");
+    addNote(repo, { title: "Hub note", type: "idea", body: "x" });
+    expect(readFileSync(join(hubRoot, "projects", "shop", "state.md"), "utf8")).toContain("hub");
+    expect(listNotes(repo)[0].data.title).toBe("Hub note");
+  });
+});

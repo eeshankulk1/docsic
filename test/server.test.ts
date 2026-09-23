@@ -14,9 +14,9 @@ describe("mcp server", () => {
     const client = new Client({ name: "t", version: "0" });
     await client.connect(c);
     const tools = (await client.listTools()).tools.map(t => t.name).sort();
-    expect(tools).toEqual(["ctx_check", "ctx_init", "ctx_load", "ctx_recall", "ctx_save"]);
-    await client.callTool({ name: "ctx_save", arguments: { cwd: root, kind: "state", content: "## Now\na\n## In flight\nb\n## Next\nc" } });
-    const res: any = await client.callTool({ name: "ctx_load", arguments: { cwd: root } });
+    expect(tools).toEqual(["docsic_check", "docsic_init", "docsic_load", "docsic_recall", "docsic_save"]);
+    await client.callTool({ name: "docsic_save", arguments: { cwd: root, kind: "state", content: "## Now\na\n## In flight\nb\n## Next\nc" } });
+    const res: any = await client.callTool({ name: "docsic_load", arguments: { cwd: root } });
     expect(JSON.parse(res.content[0].text).state).toContain("## Now");
   });
 });

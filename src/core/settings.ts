@@ -5,11 +5,10 @@ import { managedDir } from "./repo.js";
 /** Per-user adapter choices. Managed, never in the repo (spec §10). */
 export interface Settings {
   tracker: "github" | "none";
-  hub: "none" | string;
   harness: "claude-code" | "codex" | "cursor" | "mcp";
 }
 
-const DEFAULTS: Settings = { tracker: "github", hub: "none", harness: "mcp" };
+const DEFAULTS: Settings = { tracker: "github", harness: "mcp" };
 
 export function readSettings(root: string): Settings {
   const p = join(managedDir(root), "settings.json");

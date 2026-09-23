@@ -1,10 +1,10 @@
 {
-  "name": "@eesh/ctx",
+  "name": "docsic",
   "version": "0.1.0",
   "description": "Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.",
   "type": "module",
   "bin": {
-    "ctx": "./dist/cli.js"
+    "docsic": "./dist/cli.js"
   },
   "files": [
     "dist"

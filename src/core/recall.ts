@@ -1,8 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import { listDocs } from "./docs.js";
 import { listNotes } from "./memory.js";
-import { readSettings } from "./settings.js";
+import { loadHub, parseDecisionRows } from "./hub.js";
 
 export interface Hit { source: string; score: number; excerpt: string }
 
@@ -33,27 +33,51 @@ function walkMd(dir: string, out: { path: string; text: string }[], depth = 0): 
   }
 }
 
-export function recall(root: string, query: string, limit = 10): Hit[] {
+export function recall(root: string, query: string, opts: { limit?: number; hubOnly?: boolean } = {}): Hit[] {
   const ts = terms(query);
   if (!ts.length) return [];
   const hits: Hit[] = [];
-  for (const d of listDocs(root)) {
-    if (d.kind === "config") continue;
-    const s = score(d.raw, ts);
-    if (s) hits.push({ source: `docs/${d.rel}`, score: s, excerpt: excerpt(d.body, ts) });
-  }
-  for (const n of listNotes(root)) {
-    const s = score(n.body + " " + n.data.title, ts);
-    if (s) hits.push({ source: `note:${n.file} (${n.data.status})`, score: s * 2, excerpt: n.body.trim() });
-  }
-  const hub = readSettings(root).hub;
-  if (hub && hub !== "none" && existsSync(hub)) {
-    const files: { path: string; text: string }[] = [];
-    walkMd(hub, files);
-    for (const f of files) {
-      const s = score(f.text, ts);
-      if (s) hits.push({ source: `hub:${relative(hub, f.path)}`, score: s, excerpt: excerpt(f.text, ts) });
+  if (!opts.hubOnly) {
+    for (const d of listDocs(root)) {
+      if (d.kind === "config") continue;
+      const s = score(d.raw, ts);
+      if (s) hits.push({ source: `docs/${d.rel}`, score: s, excerpt: excerpt(d.body, ts) });
+    }
+    for (const n of listNotes(root)) {
+      const s = score(n.body + " " + n.data.title, ts);
+      if (s) hits.push({ source: `note:${n.file} (${n.data.status})`, score: s * 2, excerpt: n.body.trim() });
     }
   }
-  return hits.sort((a, b) => b.score - a.score).slice(0, limit);
+  const hub = loadHub();
+  if (hub) hits.push(...hubHits(hub.root, ts, opts.hubOnly ? new Set() : new Set(listNotes(root).map(n => n.file))));
+  return hits.sort((a, b) => b.score - a.score).slice(0, opts.limit ?? 10);
+}
+
+/**
+ * Everything in the hub (every project, plus whatever else lives there). Units are
+ * rendered whole where a fragment would be useless: a decisions.md row, a note.
+ */
+function hubHits(hubRoot: string, ts: string[], skipNotes: Set<string>): Hit[] {
+  const files: { path: string; text: string }[] = [];
+  walkMd(hubRoot, files);
+  const hits: Hit[] = [];
+  for (const f of files) {
+    const rel = relative(hubRoot, f.path);
+    if (basename(f.path) === "decisions.md") {
+      for (const r of parseDecisionRows(f.text)) {
+        const s = score(`${r.decision} ${r.reasoning}`, ts);
+        if (s) hits.push({ source: `hub:${rel}:${r.line}`, score: s * 2, excerpt: `${r.date} | ${r.decision} | ${r.reasoning}`.slice(0, 1200) });
+      }
+      continue;
+    }
+    if (/\/notes\//.test(f.path)) {
+      if (skipNotes.has(basename(f.path))) continue; // already found as this repo's own note
+      const s = score(f.text, ts);
+      if (s) hits.push({ source: `hub:${rel}`, score: s * 2, excerpt: f.text.trim().slice(0, 1200) });
+      continue;
+    }
+    const s = score(f.text, ts);
+    if (s) hits.push({ source: `hub:${rel}`, score: s, excerpt: excerpt(f.text, ts) });
+  }
+  return hits;
 }

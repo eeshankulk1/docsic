@@ -3,9 +3,9 @@ owns: [src/**]
 status: current
 ---
 
-<!-- ctx: allow command-grade -->
+<!-- docsic: allow command-grade -->
 
-# ctx - Specification v1
+# docsic - Specification v1
 
 > Working name. The system keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.
 
@@ -18,16 +18,16 @@ Status: draft, 2026-08-23. Derived from the docs-standard v2 rollout across thro
 One command, ever:
 
 ```
-npx ctx init
+npx docsic init
 ```
 
 Run it in a repo. On first use it installs itself and registers with every coding agent on the machine that supports MCP - Claude Code, Codex, Cursor, whatever is there - then initializes the repo. In every repo after that, it just initializes.
 
 The user never writes an MCP config line, a `.gitignore` entry, a CI step, or a decision about where a fact belongs.
 
-**Why the CLI is the install and MCP is the runtime.** Every MCP server with a clean one-line install is a *remote* server - it runs on the vendor's infrastructure and you register a URL. ctx reads and writes files in your repo, so it must run locally over stdio, and stdio registration is verbose by nature. Rather than hand the user that string, the CLI writes it for them. MCP remains the interface every session actually uses (§9); the CLI exists only so the install is one short line.
+**Why the CLI is the install and MCP is the runtime.** Every MCP server with a clean one-line install is a *remote* server - it runs on the vendor's infrastructure and you register a URL. docsic reads and writes files in your repo, so it must run locally over stdio, and stdio registration is verbose by nature. Rather than hand the user that string, the CLI writes it for them. MCP remains the interface every session actually uses (§9); the CLI exists only so the install is one short line.
 
-**Naming affects this.** The install string is mostly the package name, so it should be short and actually available on npm. `ctx` is taken on npm; it stays the working name here and the package ships as `@eesh/ctx` until a final name is chosen.
+**Naming affects this.** The install string is mostly the package name, so it should be short and actually available on npm. The working name `ctx` was taken; the package ships as `docsic`, and the bin, MCP server name, tool prefix (`docsic_*`), config (`docs/docsic.json`) and managed store (`~/.docsic`) all match. Pre-rename installs are adopted: a `docs/ctx.json` is still read, `~/.ctx` is moved to `~/.docsic` on first use, and `init` replaces old `ctx` registrations.
 
 ## 2. What this is not
 
@@ -45,12 +45,12 @@ Two classes of context with different physics. Conflating them is the mistake ev
 
 | Class | Home | Rationale |
 |---|---|---|
-| **Derived from code** - `docs/`, including `docs/ctx.json` (config) | The repo, committed | Must branch and merge with the code it describes or it lies. Reviewable in PRs, which is the only mechanism that has ever kept docs honest. Readable by teammates who do not use ctx - a clone carries every command and port. |
+| **Derived from code** - `docs/`, including `docs/docsic.json` (config) | The repo, committed | Must branch and merge with the code it describes or it lies. Reviewable in PRs, which is the only mechanism that has ever kept docs honest. Readable by teammates who do not use docsic - a clone carries every command and port. |
 | **Everything else** - state, notes, adapter settings | Managed | Does not branch. Changes several times a day. In git it is diff noise and merge conflicts, and worktrees would each get a divergent copy. |
 
-**Managed** means: local-first at `~/.ctx/<repo-identity>/`, keyed by git remote URL so every worktree of a repo shares one store. The URL is normalized first (ssh and https forms collapse, `.git` suffix dropped, lowercased); a repo with no remote is keyed by a hash of its root path and re-keyed when a remote appears. No account, works offline. An optional sign-in syncs it, which is what buys cross-machine, cross-harness, and eventually team sharing.
+**Managed** means: local-first at `~/.docsic/<repo-identity>/`, keyed by git remote URL so every worktree of a repo shares one store. The URL is normalized first (ssh and https forms collapse, `.git` suffix dropped, lowercased); a repo with no remote is keyed by a hash of its root path and re-keyed when a remote appears. No account, works offline. An optional sign-in syncs it, which is what buys cross-machine, cross-harness, and eventually team sharing.
 
-The user's mental model, if they ever ask: *docs are for people and live in your repo; everything else is for the agent and we keep it.* They never open either location by hand. ctx touches exactly one directory in the repo: `docs/`.
+The user's mental model, if they ever ask: *docs are for people and live in your repo; everything else is for the agent and we keep it.* They never open either location by hand. docsic touches exactly one directory in the repo: `docs/`.
 
 **No-repo mode** (`repo: false`): for read-only checkouts - an OSS contribution, a client repo, a codebase you cannot commit to - `docs/` also lives in the managed store. Zero repo footprint. A mode, never the default.
 
@@ -62,7 +62,7 @@ Every doc is optional except `architecture.md`. Include what the project actuall
 
 | Doc | When | Owns |
 |-----|------|------|
-| `ctx.json` | always | Config: every command-grade fact (§13). Machine-read, not a document; exempt from the hub index |
+| `docsic.json` | always | Config: every command-grade fact (§13). Machine-read, not a document; exempt from the hub index |
 | `architecture.md` | always | The hub: what the system is, repo layout, stack, component relationships, doc index |
 | `local-dev.md` | always | Clone-to-running narrative, prerequisites, gotchas |
 | `deployment.md` | always | Deploy targets, build, prod environment, CI/CD |
@@ -93,7 +93,7 @@ status: current                           # current | superseded
 
 ### The hub index rule
 
-`architecture.md` contains an index listing **every** `.md` file and subdirectory in `docs/`, with `plans/` and `reference/` each as a single row (`ctx.json` is exempt). "Start at architecture.md, it links everything" must be literally true. A doc missing from the index is a lint failure.
+`architecture.md` contains an index listing **every** `.md` file and subdirectory in `docs/`, with `plans/` and `reference/` each as a single row (`docsic.json` is exempt). "Start at architecture.md, it links everything" must be literally true. A doc missing from the index is a lint failure.
 
 ---
 
@@ -130,10 +130,10 @@ When several docs need the same fact, one doc owns and states it; the others lin
 | `docs/*.md` | Current-state truth: structure, contracts, procedures, design language, rationale |
 | `docs/plans/` | Historical record. Never current truth. |
 | `docs/reference/` | Verbatim captured material |
-| `docs/ctx.json` | Command-grade facts: commands, ports, env var names, service URLs, model IDs |
+| `docs/docsic.json` | Command-grade facts: commands, ports, env var names, service URLs, model IDs |
 | State (managed) | Where things stand right now |
 | Notes (managed) | Knowledge in transit; open until absorbed |
-| Adapter settings (managed) | Per-user choices: tracker, hub, harness (§10) |
+| Adapter settings (managed) | Per-repo choices: tracker, harness (§10). Per-user: hub, distill in `~/.docsic/config.json` |
 | `AGENTS.md` / `CLAUDE.md` | Pointers into `docs/`, plus genuine gotchas fitting no doc. **No commands.** |
 | `README.md` | The public face and a pointer to `docs/`. Nothing version-volatile. |
 
@@ -175,7 +175,7 @@ Where things stand **now**. Replaced wholesale, never appended.
 - **Budget: 800 tokens.** Enforced mechanically. Line counts do not work - a v2 state file hit 39 lines and 2,018 words by writing paragraphs as bullets.
 - Sections: `## Now`, `## In flight`, `## Next`
 - `## Now` is partly derived from git history and open PRs rather than free-written, so it cannot drift into a log
-- Rewritten by the session-end distiller where hooks exist (Claude Code, Codex); on hook-less harnesses `ctx_save` is the only write path and the agent is told so in `ctx_load`
+- Rewritten by the session-end distiller where hooks exist (Claude Code, Codex); on hook-less harnesses `docsic_save` is the only write path and the agent is told so in `docsic_load`
 - Budget is measured as `ceil(chars / 4)`; the method is fixed so the number means the same thing everywhere
 
 ### `notes`
@@ -197,15 +197,15 @@ MCP is the core. It works on every harness. Five tools, and it should stay five.
 
 | Tool | Returns |
 |---|---|
-| `ctx_load` | State, open notes, doc map for this repo. The session-start payload. |
-| `ctx_recall(query)` | Search across docs, notes, decisions - this repo and, when a hub is configured, all repos |
-| `ctx_init` | Scaffold and triage (§11) |
-| `ctx_check` | Violations, structured, for the agent to fix (§12) |
-| `ctx_save` | Record a state change or a note |
+| `docsic_load` | State, open notes, doc map for this repo. The session-start payload. |
+| `docsic_recall(query)` | Search across docs, notes, decisions - this repo and, when a hub is configured, all repos |
+| `docsic_init` | Scaffold and triage (§11) |
+| `docsic_check` | Violations, structured, for the agent to fix (§12) |
+| `docsic_save` | Record a state change or a note |
 
-**The server has no model.** A stdio MCP server has no API key and makes no LLM calls. Anything that needs judgment - the `ctx_check` agent pass, the `ctx_init` defect list, the state distiller - is done by the *calling* agent: the tool returns the material and a rubric, the agent does the work, and reports results back through `ctx_save`. Mechanical work (§12 mechanical pass, file moves, git queries) runs inside the server.
+**The server has no model.** A stdio MCP server has no API key and makes no LLM calls. Anything that needs judgment - the `docsic_check` agent pass, the `docsic_init` defect list, the state distiller - is done by the *calling* agent: the tool returns the material and a rubric, the agent does the work, and reports results back through `docsic_save`. Mechanical work (§12 mechanical pass, file moves, git queries) runs inside the server.
 
-**Hooks are a detected upgrade, never a requirement.** When `ctx_init` sees a harness that supports them (Claude Code, Codex), it installs hooks so `ctx_load` fires automatically at session start and the distiller at session end, instead of depending on the agent to remember. Pure latency and reliability. Everything works without them.
+**Hooks are a detected upgrade, never a requirement.** When `docsic_init` sees a harness that supports them (Claude Code, Codex), it installs hooks so `docsic_load` fires automatically at session start and the distiller at session end, instead of depending on the agent to remember. Pure latency and reliability. Everything works without them.
 
 **CI is optional.** `check` is a tool the agent calls - on session start, and before claiming a task is done. It repairs rather than blocks, which is strictly better than a pipeline gate. Teams that want a hard gate re-run the same tool in CI. The product must be 100% functional with no CI at all.
 
@@ -226,17 +226,27 @@ close(id, ref)
 
 Default `github` (Issues - every repo has it, no signup). Also `linear`, `jira`, `beads`. **`none` is first-class**: the system works with no queue and simply stops mentioning open items.
 
-Task tracking is a solved, crowded space. ctx integrates with it and never competes with it.
+Task tracking is a solved, crowded space. docsic integrates with it and never competes with it.
 
 ### `harness`
 `claude-code`, `codex`, `cursor`, `mcp` (universal fallback). Determines whether hooks are installed and how context is injected.
 
 ### `hub`
-`none` (default), or a path/repo for cross-project aggregation. This is where a personal knowledge base plugs in and gains cross-repo recall. Optional, invisible to a first-time user.
+Absent (default), or a git repo for cross-project memory, set per user in `~/.docsic/config.json`:
+
+```json
+{ "hub": { "root": "~/brain", "reposRoot": "~/code", "overrides": { "<slug>": { "repoDir": "...", "aliases": ["..."] } }, "skipPromptMatch": ["<slug>"], "sync": "git" },
+  "distill": "auto" }
+```
+
+Every folder under `<root>/projects/` is a project; archiving one (moving it out) stops its injection. A repo maps to a project when a path segment is the slug, an alias, or `<slug>-*` (worktrees), so a project needs no `docsic init` to get memory. For a mapped repo the hub folder *is* the store: state and notes land there and are committed and pushed in the background (memory files only, never anything else). The hooks then add what one repo cannot: a snapshot of every project when the session starts in the workspace (the hub or `reposRoot`), full memory the first time a prompt names a project, and the delta when a parallel session rewrites memory. `docsic recall --hub` searches all of it. This is where a personal knowledge base plugs in. Optional, invisible to a first-time user.
+
+### `distill`
+`off` (default) or `auto`. With `auto`, the session-end hook hands the transcript to a detached headless agent (Claude Code `claude -p` with a read/edit-only tool allowlist, or Codex in a workspace-write sandbox), confined to the memory directory. It rewrites state and files at most two notes, then docsic syncs the hub. Sessions under 30 KB of transcript are skipped; one distiller runs per project at a time. Opt-in because it spends the user's model usage.
 
 ---
 
-## 11. `ctx_init`
+## 11. `docsic_init`
 
 On a cold repo, init is **triage**, not scaffolding.
 
@@ -264,11 +274,11 @@ Init returns two things:
 1. The `docs/` tree
 2. **A defect list.** Writing docs forces verification, and verification surfaces real problems - dead test configuration, hardcoded values that block deployment, artifacts committed by mistake, READMEs describing a stack the project no longer uses. None of it asked for; all of it found on the way to writing something else. §15 has a real one.
 
-The defect list is the product's first impression. A user points ctx at a repo they are embarrassed by and gets back a map plus a list of real problems, before reading a word of documentation.
+The defect list is the product's first impression. A user points docsic at a repo they are embarrassed by and gets back a map plus a list of real problems, before reading a word of documentation.
 
 ---
 
-## 12. `ctx_check`
+## 12. `docsic_check`
 
 Two passes. **Both ship in v1.** This is agentic docs-as-code; a purely mechanical linter cannot see the half of the problem that matters most.
 
@@ -288,7 +298,7 @@ Two passes. **Both ship in v1.** This is agentic docs-as-code; a purely mechanic
 | `state-budget` | State exceeds its token budget |
 | `note-stale` | A note has been `open` past 30 days |
 
-A doc that must quote command-grade facts as examples (a spec, a style guide) opts out of `command-grade-misplaced` for the whole file with the comment `<!-- ctx: allow command-grade -->` near the top. It is an escape hatch, not a convention.
+A doc that must quote command-grade facts as examples (a spec, a style guide) opts out of `command-grade-misplaced` for the whole file with the comment `<!-- docsic: allow command-grade -->` near the top. It is an escape hatch, not a convention.
 
 **Do not check duplicated file paths.** Two docs citing the same source file while stating different facts about it is correct. Measured precision: ~43% on paths, ~100% on the strong classes (env var, port, command, URL, model). See §15.
 
@@ -310,7 +320,7 @@ It also has to make judgment calls mechanical cannot. Example: the same phrase a
 
 ## 13. Config schema
 
-`docs/ctx.json`, committed with the docs. Written by init, healed by any agent that discovers a fact the hard way. Adapter choices are not here - they are per user and live in the managed store.
+`docs/docsic.json`, committed with the docs. Written by init, healed by any agent that discovers a fact the hard way. Adapter choices are not here - they are per user and live in the managed store.
 
 ```json
 {

@@ -1,0 +1,9 @@
+{
+  "updated": "2026-08-23",
+  "stacks": [
+    { "name": "docsic", "dir": ".", "runner": "vitest", "testCommand": "npx vitest run", "buildCommand": "npm run build" }
+  ],
+  "lifecycle": { "startAll": "npm run build && node dist/cli.js serve" },
+  "env": { "docsic": { "file": null, "required": [], "optional": ["DOCSIC_HOME"] } },
+  "notes": "Tests set DOCSIC_HOME per test; never run the suite with DOCSIC_HOME pointing at your real ~/.docsic."
+}

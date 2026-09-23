@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 export function tmpRepo(): string {
-  const root = mkdtempSync(join(tmpdir(), "ctx-"));
-  process.env.CTX_HOME = mkdtempSync(join(tmpdir(), "ctxhome-"));
+  const root = mkdtempSync(join(tmpdir(), "docsic-"));
+  process.env.DOCSIC_HOME = mkdtempSync(join(tmpdir(), "docsichome-"));
   const g = (...a: string[]) => execFileSync("git", a, { cwd: root, stdio: "ignore" });
   g("init", "-q"); g("config", "user.email", "t@t"); g("config", "user.name", "t");
   return root;

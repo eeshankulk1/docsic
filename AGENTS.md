@@ -1,6 +1,6 @@
-# ctx
+# docsic
 
-Start at `docs/architecture.md` - it indexes every doc. Exact commands are in `docs/ctx.json`; never copy them here.
+Start at `docs/architecture.md` - it indexes every doc. Exact commands are in `docs/docsic.json`; never copy them here.
 
 ## Gotchas
 

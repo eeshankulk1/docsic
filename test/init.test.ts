@@ -26,7 +26,7 @@ describe("init triage", () => {
     const plan = readFileSync(join(root, r.moved[0].split(" -> ")[1]), "utf8");
     expect(plan).toMatch(/status: done/);
     expect(plan).toMatch(/original-path: /);
-    expect(existsSync(join(root, "docs/ctx.json"))).toBe(true);
+    expect(existsSync(join(root, "docs/docsic.json"))).toBe(true);
     expect(existsSync(join(root, "AGENTS.md"))).toBe(true);
     commit(root);
     // scaffold is index-complete for what it moved; only the TODO leaf docs are missing

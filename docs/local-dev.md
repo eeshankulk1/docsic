@@ -17,7 +17,7 @@ The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at anot
 
 ## Hooks
 
-`init` installs two Claude Code hooks: SessionStart prints the load payload as context, SessionStart also records HEAD for the session; Stop runs the mechanical checks and blocks once per session, but only on errors in files changed since that HEAD (committed, staged, unstaged or untracked), so pre-existing debt never blocks an unrelated session. Both read the hook payload from stdin and stay silent in repos with no `docs/docsic.json` (or pre-rename `docs/ctx.json`), i.e. anywhere `init` never ran. Re-run `init --reinstall` after changing the hook commands.
+`init` installs four Claude Code hooks: SessionStart prints the load payload (and hub memory) as context, UserPromptSubmit injects hub memory on a project's first mention, SessionEnd hands off to the distiller when `distill` is `auto`, SessionStart also records HEAD for the session; Stop runs the mechanical checks and blocks once per session, but only on errors in files changed since that HEAD (committed, staged, unstaged or untracked), so pre-existing debt never blocks an unrelated session. Both read the hook payload from stdin and stay silent in repos with no `docs/docsic.json` (or pre-rename `docs/ctx.json`), i.e. anywhere `init` never ran. Re-run `init --reinstall` after changing the hook commands.
 
 ## Gotchas
 

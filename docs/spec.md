@@ -133,7 +133,7 @@ When several docs need the same fact, one doc owns and states it; the others lin
 | `docs/docsic.json` | Command-grade facts: commands, ports, env var names, service URLs, model IDs |
 | State (managed) | Where things stand right now |
 | Notes (managed) | Knowledge in transit; open until absorbed |
-| Adapter settings (managed) | Per-user choices: tracker, hub, harness (§10) |
+| Adapter settings (managed) | Per-repo choices: tracker, harness (§10). Per-user: hub, distill in `~/.docsic/config.json` |
 | `AGENTS.md` / `CLAUDE.md` | Pointers into `docs/`, plus genuine gotchas fitting no doc. **No commands.** |
 | `README.md` | The public face and a pointer to `docs/`. Nothing version-volatile. |
 
@@ -232,7 +232,17 @@ Task tracking is a solved, crowded space. docsic integrates with it and never co
 `claude-code`, `codex`, `cursor`, `mcp` (universal fallback). Determines whether hooks are installed and how context is injected.
 
 ### `hub`
-`none` (default), or a path/repo for cross-project aggregation. This is where a personal knowledge base plugs in and gains cross-repo recall. Optional, invisible to a first-time user.
+Absent (default), or a git repo for cross-project memory, set per user in `~/.docsic/config.json`:
+
+```json
+{ "hub": { "root": "~/brain", "reposRoot": "~/code", "overrides": { "<slug>": { "repoDir": "...", "aliases": ["..."] } }, "skipPromptMatch": ["<slug>"], "sync": "git" },
+  "distill": "auto" }
+```
+
+Every folder under `<root>/projects/` is a project; archiving one (moving it out) stops its injection. A repo maps to a project when a path segment is the slug, an alias, or `<slug>-*` (worktrees), so a project needs no `docsic init` to get memory. For a mapped repo the hub folder *is* the store: state and notes land there and are committed and pushed in the background (memory files only, never anything else). The hooks then add what one repo cannot: a snapshot of every project when the session starts in the workspace (the hub or `reposRoot`), full memory the first time a prompt names a project, and the delta when a parallel session rewrites memory. `docsic recall --hub` searches all of it. This is where a personal knowledge base plugs in. Optional, invisible to a first-time user.
+
+### `distill`
+`off` (default) or `auto`. With `auto`, the session-end hook hands the transcript to a detached headless agent (Claude Code `claude -p` with a read/edit-only tool allowlist, or Codex in a workspace-write sandbox), confined to the memory directory. It rewrites state and files at most two notes, then docsic syncs the hub. Sessions under 30 KB of transcript are skipped; one distiller runs per project at a time. Opt-in because it spends the user's model usage.
 
 ---
 

@@ -11,7 +11,7 @@ docsic ships as an npm package; there is no server to deploy. Publishing runs th
 
 | Harness | Registration | Hooks |
 |---------|--------------|-------|
-| Claude Code | `mcpServers.docsic` in the user-level config | SessionStart, Stop in user settings |
+| Claude Code | `mcpServers.docsic` in the user-level config | SessionStart, UserPromptSubmit, Stop, SessionEnd in user settings |
 | Codex | `[mcp_servers.docsic]` in the user config | none |
 | Cursor | `mcpServers.docsic` in the user MCP config | none |
 

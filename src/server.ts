@@ -31,7 +31,7 @@ export function createServer(): McpServer {
   server.registerTool("docsic_recall", {
     description: "Search docs, notes and (when a hub is configured) every other repo's knowledge. Use before solving something another session may have solved.",
     inputSchema: z.object({ query: z.string(), cwd: cwdArg, limit: z.number().int().max(50).optional() }),
-  }, async ({ query, cwd, limit }) => text(recall(findRepoRoot(cwd), query, limit)));
+  }, async ({ query, cwd, limit }) => text(recall(findRepoRoot(cwd), query, { limit })));
 
   server.registerTool("docsic_check", {
     description: "Mechanical doc-convention checks (hub index, ownership of command-grade facts, frontmatter, links, staleness, state budget, stale notes) plus the rubric for the agent pass. Run on load and before claiming a task done; fix what it reports.",

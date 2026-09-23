@@ -66,14 +66,20 @@ export function register(h: Harness): HarnessReport {
   return { harness: h, registered: true, hooks: false, detail: "~/.cursor/mcp.json mcpServers.docsic" };
 }
 
-/** SessionStart injects docsic load; Stop runs the repair gate once per session. Idempotent. */
+/**
+ * SessionStart injects context; UserPromptSubmit injects hub memory on first mention;
+ * Stop runs the repair gate once per session; SessionEnd hands the transcript to the
+ * distiller (when enabled in ~/.docsic/config.json). Idempotent.
+ */
 function installClaudeHooks(settingsPath: string): boolean {
   const s = readJson(settingsPath);
   s.hooks = s.hooks ?? {};
   const cli = JSON.stringify(cliPath());
   const entries: [string, string][] = [
     ["SessionStart", `node ${cli} hook session-start`],
+    ["UserPromptSubmit", `node ${cli} hook prompt-submit`],
     ["Stop", `node ${cli} hook stop`],
+    ["SessionEnd", `node ${cli} hook session-end`],
   ];
   for (const [event, command] of entries) {
     // Drop pre-rename ctx hooks, then add ours unless something already runs `docsic ... hook`.

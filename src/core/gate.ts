@@ -30,15 +30,36 @@ export interface GateResult {
   unowned: string[];
   /** Docs-skip lines naming something that isn't required (harmless, reported) */
   unusedWaivers: string[];
+  /** Advisory README cadence check; never affects ok. Absent when docs/gate.json sets readme.every to 0. */
+  readme?: ReadmeCheck;
   ok: boolean;
 }
+
+/**
+ * README.md is the public face, refreshed on a cadence rather than per PR:
+ * due after `every` first-parent commits on the base since it last changed, or
+ * when a top-level directory appeared or disappeared since then.
+ */
+export interface ReadmeCheck {
+  due: boolean;
+  reason?: string;
+  /** short sha of README.md's last change on the base (first-parent) */
+  since?: string;
+  /** that commit's date (YYYY-MM-DD): what shipped since then is the refresh's input */
+  date?: string;
+  /** first-parent commits (PRs, in a squash-merge repo) on the base since then */
+  prs: number;
+  every: number;
+  dirs: { added: string[]; removed: string[] };
+}
+export const README_EVERY = 10;
 
 /**
  * docs/gate.json - its own file, not a key in docsic.json: docsic.json marks a repo
  * that ran `docsic init` (full standard, Stop gate), and a repo can adopt the PR
  * gate without that.
  */
-export interface GateConfig { ignore?: string[]; owns?: Record<string, string[]> }
+export interface GateConfig { ignore?: string[]; owns?: Record<string, string[]>; readme?: { every?: number } }
 export const GATE_CONFIG = "gate.json";
 
 export function readGateConfig(root: string): GateConfig {
@@ -115,12 +136,14 @@ export function runGate(root: string, opts: { base?: string; body?: string } = {
 
   const exclude = [
     ":(exclude)docs/**",
+    ":(exclude,icase)README.md", // the README has its own cadence check, never an owner
     ...owners.map(o => `:(exclude)${o.doc}`),
     ...owners.flatMap(o => o.globs.map(g => `:(exclude,glob)${g}`)),
     ...(Array.isArray(gate.ignore) ? gate.ignore : []).map(g => `:(exclude,glob)${g}`),
   ];
   const unowned = owners.length ? changedIn([".", ...exclude]) : [];
 
+  const readme = readmeCheck(root, base, changed, gate);
   return {
     base,
     mergeBase,
@@ -129,14 +152,51 @@ export function runGate(root: string, opts: { base?: string; body?: string } = {
     required,
     unowned,
     unusedWaivers: [...waivers.keys()].filter(k => !used.has(k)),
+    ...(readme ? { readme } : {}),
     ok: required.every(r => r.status !== "missing"),
   };
 }
 
+/** Non-dot top-level directories: a new one (ios/, worker/) is a new surface the README should name. */
+function topDirs(names: string[], ignore: string[]): Set<string> {
+  const skip = new Set(ignore.map(g => g.replace(/\/\*\*?$/, "")));
+  return new Set(names.filter(d => d && !d.startsWith(".") && !skip.has(d)));
+}
+
+/** Best effort: git failures here only weaken an advisory, so they never throw. */
+function readmeCheck(root: string, base: string, changed: Set<string>, gate: GateConfig): ReadmeCheck | undefined {
+  const every = typeof gate.readme?.every === "number" ? gate.readme.every : README_EVERY;
+  if (every <= 0) return undefined;
+  const ignore = Array.isArray(gate.ignore) ? gate.ignore : [];
+  const name = git(root, ["ls-tree", "--name-only", base]).split("\n").find(f => /^readme\.md$/i.test(f)) ?? "README.md";
+  const empty: ReadmeCheck = { due: false, prs: 0, every, dirs: { added: [], removed: [] } };
+  if (changed.has(name)) return { ...empty, reason: `${name} is edited in this change` };
+  const [sha, date] = git(root, ["log", "-1", "--first-parent", "--format=%H %cs", base, "--", name]).split(" ");
+  if (!sha || !git(root, ["ls-tree", "--name-only", base, "--", name])) {
+    return existsSync(join(root, name)) ? empty : { ...empty, due: true, reason: `${name} is missing` };
+  }
+  const prs = Number(git(root, ["rev-list", "--count", "--first-parent", `${sha}..${base}`])) || 0;
+  const then = topDirs(git(root, ["ls-tree", "-d", "--name-only", sha]).split("\n"), ignore);
+  // The working tree, not HEAD: a dir this change adds (even untracked) counts, one it deleted doesn't.
+  const files = git(root, ["ls-files", "--cached", "--others", "--exclude-standard"]).split("\n");
+  const firsts = files.filter(f => f.includes("/")).map(f => f.slice(0, f.indexOf("/")));
+  const now = new Set([...topDirs(firsts, ignore)].filter(d => existsSync(join(root, d))));
+  const added = [...now].filter(d => !then.has(d)).sort();
+  const removed = [...then].filter(d => !now.has(d)).sort();
+  const reasons = [
+    prs >= every ? `${prs} PRs landed since ${name} last changed (${date}; every ${every})` : "",
+    added.length ? `new top-level dir${added.length > 1 ? "s" : ""} ${added.map(d => `${d}/`).join(", ")}` : "",
+    removed.length ? `top-level dir${removed.length > 1 ? "s" : ""} removed: ${removed.map(d => `${d}/`).join(", ")}` : "",
+  ].filter(Boolean);
+  return { due: reasons.length > 0, ...(reasons.length ? { reason: reasons.join("; ") } : {}), since: sha.slice(0, 7), date, prs, every, dirs: { added, removed } };
+}
+
 export function formatGate(r: GateResult): string {
   const out: string[] = [`docs gate: base ${r.base} (${r.mergeBase.slice(0, 7)}), ${r.changed} changed files`];
+  const readme = r.readme?.due ? `readme: due - ${r.readme.reason}` : null;
   if (!r.owners) {
     out.push("no doc declares owns: - nothing to enforce (add owns: frontmatter to docs/*.md)");
+    if (readme) out.push(readme);
     return out.join("\n");
   }
   if (!r.required.length) out.push("no doc's owns: matched this change - nothing required");
@@ -153,6 +213,7 @@ export function formatGate(r: GateResult): string {
     if (r.unowned.length > 20) out.push(`  ... ${r.unowned.length - 20} more`);
   }
   if (r.unusedWaivers.length) out.push(`waivers for docs this change doesn't require (ignored): ${r.unusedWaivers.join(", ")}`);
+  if (readme) out.push(readme);
   const missing = r.required.filter(d => d.status === "missing").length;
   out.push(missing
     ? `${missing} of ${r.required.length} required docs missing: edit them, or add \`Docs-skip: <doc> - <reason>\` to the PR body`

@@ -135,11 +135,22 @@ When several docs need the same fact, one doc owns and states it; the others lin
 | Notes (managed) | Knowledge in transit; open until absorbed |
 | Adapter settings (managed) | Per-repo choices: tracker, harness (§10). Per-user: hub, distill in `~/.docsic/config.json` |
 | `AGENTS.md` / `CLAUDE.md` | Pointers into `docs/`, plus genuine gotchas fitting no doc. **No commands.** |
-| `README.md` | The public face and a pointer to `docs/`. Nothing version-volatile. |
+| `README.md` | The public face and a pointer to `docs/`, in a fixed shape (§5.5). Nothing version-volatile. Refreshed on a cadence, not per change (§12). |
 
 **Sanctioned duplication - safety warnings only.** A destructive-command prohibition ("never reset this database, it wipes 144k ingested rows") is deliberately duplicated into config `notes`, `local-dev.md`, and any skill that could run the command. Everything else: one home.
 
 **On conflict:** config wins for command-grade facts (it is the copy agents heal). Docs win for narrative and warnings. Whoever notices fixes the losing copy in the same session.
+
+### 5.5 `README.md`
+
+Owns no code, so no change ever requires it, and it drifts silently: the product it pitches keeps moving while it still describes the scaffold. The fix is a shape that rarely goes false plus a cadence that catches the drift that remains. Exactly four parts:
+
+1. **Pitch**, 1-2 lines: what it is, for whom, where it lives
+2. **What it does** - at most six capability-level bullets. No counts, no named sub-feature lists
+3. **Surfaces and stack** - one line per surface (web, API, iOS, worker...) with its major tech only. No versions, no model names
+4. **Links into `docs/`**: `architecture.md`, `local-dev.md`, `deployment.md` - never the commands themselves
+
+No repo layout section - that is `architecture.md`'s. Nothing version-volatile: no versions, build numbers, prices, or branding specifics (those belong to a doc). A refresh is diff-minimal - it fixes lines that became false and adds a missing major capability or surface; it does not rewrite for style. The gate says when a refresh is due (§12); the input is what shipped since the README last changed.
 
 ---
 
@@ -185,6 +196,13 @@ An inbox, not a shelf. Knowledge in transit to future sessions.
 - Open notes inject at session start until absorbed
 - **Absorbed means the content reached its permanent home**: a gotcha into `docs/`, a decision into the decision log, an idea into the tracker, or dropped
 - Body ≤ 10 lines. A note open past 30 days is a lint warning.
+
+### Injection budgets
+What is stored grows; what is injected must not. A project with a hundred decision rows and thirty open notes had its session-start memory grow to ~5k tokens, most of it an index nobody reads line by line. So the hooks bound the two lists that grow, and every trailer says where the rest is:
+
+- **Decision index** (hub `decisions.md`): newest rows first, up to 600 tokens, then `+N older rows in decisions.md - search with docsic recall <terms> or read the file`. The file itself keeps every row.
+- **Open notes**: ordered gotcha > decision > discovery > idea, newest first within a type, up to 400 tokens, then `+N more open notes (M open 30+ days) in <dir> - triage them: absorb each into its home or drop it`. The same budget applies to the initialized-repo payload, which shows note bodies. `docsic_load` stays complete.
+- Same `ceil(chars / 4)` measure as state. Nothing is summarized or deleted; a trailer that keeps growing is the signal to triage.
 
 ### Work history
 **Derived from git, not maintained as a file.** Commits and PR bodies already carry it. A separate maintained log is a second system that drifts and competes with whatever tracker the user already has.
@@ -324,6 +342,7 @@ It also has to make judgment calls mechanical cannot. Example: the same phrase a
 - Changed code that no `owns:` matches is reported as **unowned** - a warning, not a failure: the agent either extends a doc's `owns:` or adds the path to `ignore` in `docs/gate.json` (tests, fixtures, lockfiles).
 - `owns` in `docs/gate.json` lets a non-doc file be required the same way (a test manifest that must follow the Makefile).
 - The config is its own file, not a key in `docsic.json`: `docsic.json` marks a repo that ran `init` and turns on the full standard and the Stop gate, and a repo can adopt the PR gate alone.
+- **README cadence (advisory).** The result carries a `readme` block: due when the README is missing, when `readme.every` first-parent commits (PRs, in a squash-merge repo; default 10) landed on the base since it last changed, or when a non-dot top-level directory appeared or disappeared since then (a new top-level dir usually means a new surface for §5.5 part 3, like `ios/`; dirs in `ignore` as `<dir>/**` don't count). Not due when the change itself edits the README. It carries `since` and `date` of the README's last change so the caller can read what shipped since. Never affects the exit code: the refresh rides whichever PR is open when it comes due. `"readme": {"every": 0}` in `docs/gate.json` turns it off.
 - Exit 1 while any required doc is missing, so CI can run it as a required check with the PR body passed in. Measured on one production repo's 30 merged PRs: path globs alone caught 88% of the doc updates agents had made, at 1.1 waivers per PR; the misses were cross-cutting flow docs, which the agent reaches from the hub index.
 
 ---

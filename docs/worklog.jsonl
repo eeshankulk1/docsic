@@ -1,0 +1,1 @@
+{"date": "2026-09-28", "project": "ctx", "summary": "docsic 0.3.0: token budgets on the injected decisions index and open-notes list, and an advisory README-due check in `docsic gate` (every 10 PRs or a new top-level dir).", "pr": 5, "why": "throu's session-start memory had grown to ~4.9k tokens with no bound (now ~1.7k), and READMEs drifted because no gate ever reached them."}

@@ -9,7 +9,7 @@ import { runMechanicalChecks, type Finding } from "./check.js";
 export interface LoadPayload {
   repo: { root: string; identity: string; branch: string; managed: string };
   state: string | null;
-  notes: { file: string; title: string; type: string; body: string }[];
+  notes: { file: string; title: string; type: string; created: string | null; body: string }[];
   docs: { path: string; kind: string; status?: string; owns?: string[] }[];
   config: { present: boolean; stacks: string[]; notes?: string };
   queue: { id: string; title: string; url: string }[];
@@ -27,7 +27,7 @@ export function load(root: string): LoadPayload {
   return {
     repo: { root, identity: repoIdentity(root), branch: git(root, ["branch", "--show-current"]), managed: managedDir(root) },
     state: readState(root),
-    notes: notes.map(n => ({ file: n.file, title: String(n.data.title ?? n.file), type: String(n.data.type ?? "discovery"), body: n.body.trim() })),
+    notes: notes.map(n => ({ file: n.file, title: String(n.data.title ?? n.file), type: String(n.data.type ?? "discovery"), created: n.data.created ? String(n.data.created) : null, body: n.body.trim() })),
     docs: docs.filter(d => d.kind !== "config").map(d => ({
       path: `docs/${d.rel}`, kind: d.kind,
       ...(d.data.status ? { status: String(d.data.status) } : {}),

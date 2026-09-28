@@ -1,0 +1,5 @@
+{
+  "ignore": [
+    "package-lock.json"
+  ]
+}

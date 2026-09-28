@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { runMechanicalChecks } from "./core/check.js";
+import { formatGate, runGate } from "./core/gate.js";
 import { detect, register } from "./core/harness.js";
 import { agentRubric, apply, triage } from "./core/init.js";
 import { load } from "./core/load.js";
@@ -14,11 +15,16 @@ import { readSettings, writeSettings } from "./core/settings.js";
 const [cmd, ...rest] = process.argv.slice(2);
 const flags = new Set(rest.filter(a => a.startsWith("--")));
 const args = rest.filter(a => !a.startsWith("--"));
+/** the value after a flag: `--base origin/main` */
+const opt = (name: string): string | undefined => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
 
 const HELP = `docsic - keeps a codebase legible to coding agents
 
   npx @eeshkulk/docsic init [--yes]  register with every coding agent on this machine, then initialize this repo
   docsic check [--json]      mechanical checks (exit 1 on errors; use in CI for a hard gate)
+  docsic gate [--base <ref>] [--body-env VAR | --body-file F] [--json]
+                             PR docs gate: docs whose owns: match the change must be edited
+                             or waived (\`Docs-skip: <doc> - <reason>\` in the PR body); exit 1 if not
   docsic load                the session-start payload, as JSON
   docsic recall <query>      search docs, notes, hub (--hub: every hub project only)
   docsic config [key value]  user config at ~/.docsic/config.json (hub, distill)
@@ -76,6 +82,14 @@ async function main(): Promise<void> {
       const errors = f.filter(x => x.severity === "error").length;
       if (!flags.has("--json")) console.log(`\n${errors} errors, ${f.length - errors} warnings`);
       process.exitCode = errors ? 1 : 0;
+      return;
+    }
+    case "gate": {
+      const bodyFile = opt("--body-file"), bodyEnv = opt("--body-env");
+      const body = bodyFile ? readFileSync(bodyFile, "utf8") : bodyEnv ? process.env[bodyEnv] ?? "" : "";
+      const r = runGate(root, { base: opt("--base"), body });
+      console.log(flags.has("--json") ? JSON.stringify(r, null, 2) : formatGate(r));
+      process.exitCode = r.ok ? 0 : 1;
       return;
     }
     case "load": console.log(JSON.stringify(load(root), null, 2)); return;

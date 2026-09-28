@@ -316,6 +316,16 @@ These are invisible to mechanical checks - the violations share no token with ea
 
 It also has to make judgment calls mechanical cannot. Example: the same phrase appearing in `local-dev.md` as a property and in `deployment.md` as a blocker is acceptable - two different claims about the same fact.
 
+### PR gate - `docsic gate`
+
+`doc-staleness` notices drift after the fact. The gate stops it per change: the files a branch changed since its merge base (committed, staged, unstaged and untracked, so it answers the same before the commit and in CI) are matched against every doc's `owns:`. Each doc that matches is **required**, and passes only if the branch edits it or the PR body waives it with `Docs-skip: <doc> - <reason>` (reason of ten or more characters). Deciding *which* docs to look at is mechanical; what they say is the agent's work, scoped to exactly the required list - the agent may still edit others, or waive a required one with a stated reason, and every waiver is visible in the PR.
+
+- A doc never requires itself, and edits under `docs/` never trigger another doc.
+- Changed code that no `owns:` matches is reported as **unowned** - a warning, not a failure: the agent either extends a doc's `owns:` or adds the path to `ignore` in `docs/gate.json` (tests, fixtures, lockfiles).
+- `owns` in `docs/gate.json` lets a non-doc file be required the same way (a test manifest that must follow the Makefile).
+- The config is its own file, not a key in `docsic.json`: `docsic.json` marks a repo that ran `init` and turns on the full standard and the Stop gate, and a repo can adopt the PR gate alone.
+- Exit 1 while any required doc is missing, so CI can run it as a required check with the PR body passed in. Measured on one production repo's 30 merged PRs: path globs alone caught 88% of the doc updates agents had made, at 1.1 waivers per PR; the misses were cross-cutting flow docs, which the agent reaches from the hub index.
+
 ---
 
 ## 13. Config schema

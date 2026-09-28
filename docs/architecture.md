@@ -12,7 +12,7 @@ A CLI + MCP server that keeps a codebase legible to coding agents and keeps that
 Two entry points over one core:
 
 - `docsic serve` - stdio MCP server exposing five tools: `docsic_load`, `docsic_recall`, `docsic_init`, `docsic_check`, `docsic_save`. The interface every session uses.
-- `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `hook` is the harness hook entry; `distill` is the background session-end distiller; `config` edits the per-user config.
+- `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `gate` is the per-PR docs gate (docs whose `owns:` match a change must be edited or waived); `hook` is the harness hook entry; `distill` is the background session-end distiller; `config` edits the per-user config.
 
 The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list) is returned to the calling agent as material plus a rubric. The one exception lives outside the server: when the user opts in (`distill: auto`), the session-end hook spawns a headless agent CLI to distill the transcript into state and notes.
 
@@ -27,6 +27,7 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 | `src/core/docs.ts` | Reads `docs/`, classifies files (hub, narrative, plan, reference, config) |
 | `src/core/frontmatter.ts` | Minimal YAML-subset frontmatter parser and serializer |
 | `src/core/check.ts` | Mechanical rules and the command-grade token detector |
+| `src/core/gate.ts` | The PR docs gate: changed files since the merge base -> required docs -> edited, waived or missing; unowned code |
 | `src/core/memory.ts` | State (budgeted) and notes (open/absorbed), in the hub project folder or the managed store |
 | `src/core/hub.ts` | Optional hub: per-user config, project routing, memory rendering, git sync |
 | `src/core/config.ts` | `docs/docsic.json` read/write |
@@ -52,4 +53,4 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 | [local-dev.md](local-dev.md) | Clone-to-running, how to exercise the server and hooks locally |
 | [deployment.md](deployment.md) | Publishing to npm and what `init` writes on a user's machine |
 
-Exact commands live in [docsic.json](docsic.json).
+Exact commands live in [docsic.json](docsic.json); the PR gate's `ignore` list is [gate.json](gate.json).

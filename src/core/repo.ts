@@ -12,6 +12,21 @@ export function git(root: string, args: string[]): string {
   }
 }
 
+/**
+ * Like git(), but a real failure (bad pathspec, E2BIG from a huge argv, a corrupted
+ * object) throws with git's stderr instead of silently collapsing to "" - callers
+ * that would otherwise treat that "" as "nothing matched" and quietly proceed.
+ */
+export function gitOrThrow(root: string, args: string[]): string {
+  try {
+    return execFileSync("git", args, { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+  } catch (e) {
+    const stderr = e && typeof e === "object" && "stderr" in e ? String((e as { stderr?: unknown }).stderr ?? "").trim() : "";
+    const detail = stderr || (e instanceof Error ? e.message : String(e));
+    throw new Error(`git ${args.join(" ")}\n${detail}`);
+  }
+}
+
 export function findRepoRoot(cwd: string = process.cwd()): string {
   const out = git(cwd, ["rev-parse", "--show-toplevel"]);
   return out || resolve(cwd);

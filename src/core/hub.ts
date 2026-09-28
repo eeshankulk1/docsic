@@ -206,14 +206,21 @@ export function snapshot(hub: Hub): Record<string, number> {
 }
 
 /**
+ * Stages state.md files and notes, commits, pulls, pushes; `$1` is the message.
+ * Wildcard pathspecs must match files (a bare `projects/*\/notes` matches
+ * nothing), and one add per pathspec keeps a hub with no notes yet from
+ * failing the whole add.
+ */
+export const HUB_SYNC_SCRIPT = `git add -A -- 'projects/*/state.md' 2>/dev/null; git add -A -- 'projects/*/notes/*' 2>/dev/null; (git diff --cached --quiet || git commit -q -m "$1") && git pull -q --rebase --autostash && git push -q`;
+
+/**
  * Commit memory changes (state.md and notes/ only) and push, in the background.
  * Never stages anything else; a failed push leaves the commit local.
  */
 export function syncHub(hub: Hub, slug: string, summary: string): void {
   if (hub.sync !== "git") return;
   const msg = `mem(${slug}): ${summary}`.slice(0, 120);
-  const script = `git add -- 'projects/*/state.md' 'projects/*/notes' && (git diff --cached --quiet || git commit -q -m "$1") && git pull -q --rebase --autostash && git push -q`;
-  spawn("sh", ["-c", script, "sh", msg], {
+  spawn("sh", ["-c", HUB_SYNC_SCRIPT, "sh", msg], {
     cwd: hub.root, detached: true, stdio: "ignore",
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   }).unref();

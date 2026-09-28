@@ -1,6 +1,6 @@
 {
   "name": "@eeshkulk/docsic",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.",
   "keywords": [
     "mcp",

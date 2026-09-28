@@ -1,5 +1,7 @@
 {
   "ignore": [
+    ".gitattributes",
+    ".gitignore",
     "package-lock.json"
   ]
 }

@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
-import { parseWaivers, runGate } from "../src/core/gate.js";
+import { formatGate, parseWaivers, runGate } from "../src/core/gate.js";
 import * as repo from "../src/core/repo.js";
 import { commit, tmpRepo, write } from "./helpers.js";
 
@@ -118,6 +118,63 @@ describe("docsic gate", () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  describe("readme cadence", () => {
+    /** README committed first, then `n` more commits on the base. */
+    function withReadme(n: number, config: object = { readme: { every: 3 } }): { root: string; readmeSha: string } {
+      const root = tmpRepo();
+      write(root, "README.md", "# x\n");
+      write(root, "src/a.ts", "export {}\n");
+      write(root, "docs/gate.json", JSON.stringify(config));
+      commit(root, "readme");
+      const readmeSha = head(root);
+      for (let i = 0; i < n; i++) commit(root, `pr ${i}`);
+      return { root, readmeSha };
+    }
+
+    it("is due once `every` PRs landed since README.md changed, never failing the gate", () => {
+      let { root, readmeSha } = withReadme(2);
+      let r = runGate(root, { base: head(root) });
+      expect(r.readme).toMatchObject({ due: false, prs: 2, every: 3, since: readmeSha.slice(0, 7) });
+      expect(formatGate(r)).not.toContain("readme:");
+
+      commit(root, "pr 3");
+      r = runGate(root, { base: head(root) });
+      expect(r.readme).toMatchObject({ due: true, prs: 3 });
+      expect(r.readme!.reason).toMatch(/3 PRs landed since README.md last changed/);
+      expect(r.readme!.date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(r.ok).toBe(true);
+      expect(formatGate(r)).toContain("readme: due - 3 PRs");
+    });
+
+    it("is due when a top-level directory appears or disappears; dot dirs and ignored dirs don't count", () => {
+      const { root } = withReadme(0, { readme: { every: 10 }, ignore: ["test/**"] });
+      write(root, "ios/App.swift", "\n");
+      write(root, ".github/ci.yml", "\n");
+      write(root, "test/a.test.ts", "\n");
+      commit(root, "ios");
+      write(root, "worker/main.py", "\n"); // untracked, added by this change
+      execFileSync("git", ["rm", "-q", "-r", "src"], { cwd: root });
+      const r = runGate(root, { base: head(root) });
+      expect(r.readme).toMatchObject({ due: true, prs: 1, dirs: { added: ["ios", "worker"], removed: ["src"] } });
+      expect(r.readme!.reason).toMatch(/new top-level dirs ios\/, worker\/; top-level dir removed: src\//);
+    });
+
+    it("is not due when this change edits README.md", () => {
+      const { root } = withReadme(5);
+      write(root, "README.md", "# x\n\nrefreshed\n");
+      const r = runGate(root, { base: head(root) });
+      expect(r.readme).toMatchObject({ due: false, reason: "README.md is edited in this change" });
+      expect(r.unowned).toEqual([]); // never reported as unowned code
+    });
+
+    it("is due when README.md is missing; readme.every 0 turns the check off", () => {
+      const { root, sha } = base();
+      expect(runGate(root, { base: sha }).readme).toMatchObject({ due: true, reason: "README.md is missing" });
+      const off = base({ readme: { every: 0 } });
+      expect(runGate(off.root, { base: off.sha }).readme).toBeUndefined();
+    });
   });
 
   it("parses waiver variants", () => {

@@ -1,17 +1,15 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { tokenBudget } from "./budget.js";
 import { parseFrontmatter, serializeFrontmatter, type Frontmatter } from "./frontmatter.js";
 import { loadHub, projectDir, resolveScope, syncHub, type Hub } from "./hub.js";
 import { managedDir } from "./repo.js";
 
+export { tokenBudget };
 export const STATE_BUDGET = 800;
 export const NOTE_TYPES = ["discovery", "gotcha", "decision", "idea"] as const;
 export type NoteType = (typeof NOTE_TYPES)[number];
 
-/** Fixed method so the number means the same thing everywhere: ceil(chars / 4). */
-export function tokenBudget(text: string): number {
-  return Math.ceil(text.length / 4);
-}
 
 /**
  * Where a repo's state and notes live: its hub project folder when a hub is

@@ -27,9 +27,10 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 | `src/core/docs.ts` | Reads `docs/`, classifies files (hub, narrative, plan, reference, config) |
 | `src/core/frontmatter.ts` | Minimal YAML-subset frontmatter parser and serializer |
 | `src/core/check.ts` | Mechanical rules and the command-grade token detector |
-| `src/core/gate.ts` | The PR docs gate: changed files since the merge base -> required docs -> edited, waived or missing; unowned code |
+| `src/core/gate.ts` | The PR docs gate: changed files since the merge base -> required docs -> edited, waived or missing; unowned code; the advisory README cadence check |
 | `src/core/memory.ts` | State (budgeted) and notes (open/absorbed), in the hub project folder or the managed store |
 | `src/core/hub.ts` | Optional hub: per-user config, project routing, memory rendering, git sync |
+| `src/core/budget.ts` | Token measure and injection budgets: what hooks inject from growing lists (decision rows, open notes) stays bounded |
 | `src/core/config.ts` | `docs/docsic.json` read/write |
 | `src/core/settings.ts` | Per-user adapter choices (managed, never in the repo) |
 | `src/core/tracker.ts` | Tracker adapter: `github` via the gh CLI, `none` |
@@ -43,7 +44,7 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 
 - Repo: `docs/` only, including `docs/docsic.json` for command-grade facts.
 - Managed: `~/.docsic/<slug>-<hash>/` with `state.md`, `notes/`, `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in docsic.json) relocates the root. `~/.docsic/config.json` is the per-user config (hub, distill); `~/.docsic/sessions/` holds per-session hook markers and distiller logs.
-- Hub (optional): a git repo with `projects/<slug>/` folders. When the config names one and a repo maps to a project (path segment equals the slug, an alias, or `<slug>-*`), that folder replaces the managed store for state and notes, writes are committed and pushed in the background, and the hooks add workspace-wide memory: a one-line-per-project snapshot outside any project, full memory on a project's first mention in a prompt, and deltas written by parallel sessions.
+- Hub (optional): a git repo with `projects/<slug>/` folders. When the config names one and a repo maps to a project (path segment equals the slug, an alias, or `<slug>-*`), that folder replaces the managed store for state and notes, writes are committed and pushed in the background, and the hooks add workspace-wide memory: a one-line-per-project snapshot outside any project, a project's memory on its first mention in a prompt (state, plus decision and open-note indexes held to a token budget), and deltas written by parallel sessions.
 
 ## Docs index
 
@@ -53,4 +54,4 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 | [local-dev.md](local-dev.md) | Clone-to-running, how to exercise the server and hooks locally |
 | [deployment.md](deployment.md) | Publishing to npm and what `init` writes on a user's machine |
 
-Exact commands live in [docsic.json](docsic.json); the PR gate's `ignore` list is [gate.json](gate.json).
+Exact commands live in [docsic.json](docsic.json); the PR gate's config (`ignore`, `owns`, the `readme` cadence) is [gate.json](gate.json).

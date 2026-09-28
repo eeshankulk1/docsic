@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -49,6 +49,19 @@ describe("hooks", () => {
     write(root, "docs/docsic.json", "{}");
     renameSync(join(root, "docs/docsic.json"), join(root, "docs/ctx.json"));
     expect(configPath(root)).toBe(join(root, "docs", "ctx.json"));
+  });
+
+  it("bounds open notes in an initialized repo's session context", async () => {
+    const root = realpathSync(tmpRepo()); // the hook resolves /var -> /private/var; the store is keyed by that path
+    write(root, "docs/docsic.json", "{}");
+    commit(root);
+    const { addNote } = await import("../src/core/memory.js");
+    for (let i = 0; i < 20; i++) addNote(root, { title: `note ${i}`, type: i === 7 ? "gotcha" : "idea", body: "line of detail ".repeat(12) });
+    const out = hook(root, "session-start");
+    const shown = out.split("\n").filter(l => l.startsWith("- (")).length;
+    expect(out.split("\n").find(l => l.startsWith("- ("))).toContain("(gotcha) note 7");
+    expect(shown).toBeLessThan(20);
+    expect(out).toMatch(new RegExp(`\\+${20 - shown} more open notes in .*notes - triage them`));
   });
 
   it("with a hub: injects project memory, the workspace snapshot, and first-mention memory", () => {

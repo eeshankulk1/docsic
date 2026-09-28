@@ -5,6 +5,7 @@ import { runMechanicalChecks } from "./core/check.js";
 import { configPath } from "./core/config.js";
 import { loadHub, projectDir, readUserConfig, renderProject, resolveScope, snapshot, syncHub, workspaceSnapshot, type Hub, type HubProject } from "./core/hub.js";
 import { load } from "./core/load.js";
+import { moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./core/budget.js";
 import { memoryHome, STATE_BUDGET } from "./core/memory.js";
 import { findRepoRoot, git, managedDir, managedRoot } from "./core/repo.js";
 
@@ -59,7 +60,7 @@ function sessionStart(root: string, session: string, initialized: boolean, hub: 
     out.push(
       "[docsic] session context",
       d.state ? `## State\n${d.state.trim()}` : "## State\n(none yet - docsic_save state before you stop)",
-      d.notes.length ? `## Open notes\n${d.notes.map(n => `- (${n.type}) ${n.title}: ${n.body}`).join("\n")}` : "",
+      openNotesBlock(root, d.notes),
       `## Docs\n${d.docs.map(x => `- ${x.path}${x.status && x.status !== "current" ? ` [${x.status}]` : ""}`).join("\n")}`,
       d.queue.length ? `## Queue\n${d.queue.slice(0, 10).map(q => `- #${q.id} ${q.title}`).join("\n")}` : "",
       d.findings.length ? `## docsic_check\n${d.findings.map(f => `- ${f.rule} ${f.file}: ${f.message}`).join("\n")}` : "",
@@ -90,6 +91,14 @@ function sessionStart(root: string, session: string, initialized: boolean, hub: 
   writeFileSync(markerPath(session), JSON.stringify(marker));
   const text = out.filter(Boolean).join("\n\n");
   if (text) console.log(text);
+}
+
+/** Open notes with bodies for an initialized repo, highest-value first, within the notes budget. */
+function openNotesBlock(root: string, notes: ReturnType<typeof load>["notes"]): string {
+  if (!notes.length) return "";
+  const fit = takeWithin(orderNotes(notes), NOTES_BUDGET, n => `- (${n.type}) ${n.title}: ${n.body}`);
+  const more = moreNotesLine(fit.rest, join(memoryHome(root).dir, "notes"));
+  return `## Open notes\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`;
 }
 
 /** First mention of a hub project injects its memory; writes by parallel sessions are injected as a delta. */

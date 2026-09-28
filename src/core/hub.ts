@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { DECISIONS_BUDGET, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./budget.js";
 import { managedRoot } from "./repo.js";
 
 /**
@@ -89,7 +90,7 @@ function readIf(p: string, max = 8192): string | null {
   try { return existsSync(p) ? readFileSync(p, "utf8").slice(0, max) : null; } catch { return null; }
 }
 
-export interface OpenNote { file: string; path: string; title: string; type: string }
+export interface OpenNote { file: string; path: string; title: string; type: string; created: string | null }
 
 export function openNotes(dir: string): OpenNote[] {
   const nd = join(dir, "notes");
@@ -103,6 +104,7 @@ export function openNotes(dir: string): OpenNote[] {
       file: f, path,
       title: (head.match(/^title:\s*(.+)$/m)?.[1] ?? f.replace(/\.md$/, "")).trim(),
       type: (head.match(/^type:\s*(.+)$/m)?.[1] ?? "note").trim(),
+      created: head.match(/^created:\s*(.+)$/m)?.[1]?.trim() ?? null,
     });
   }
   return out;
@@ -134,7 +136,11 @@ function memoryMap(hub: Hub, p: HubProject): string[] {
   const rows = parseDecisionRows(readIf(join(dir, "decisions.md"), 131072));
   if (rows.length) {
     lines.push(`decisions.md (${rows.length} rows; read the full row before changing what it governs):`);
-    for (const r of rows) lines.push(`- ${r.date}: ${clip(r.decision, 140)}`);
+    // Newest first, within budget: the file keeps every row, recall finds the rest.
+    const newest = [...rows].sort((a, b) => b.date.localeCompare(a.date) || b.line - a.line);
+    const fit = takeWithin(newest, DECISIONS_BUDGET, r => `- ${r.date}: ${clip(r.decision, 140)}`);
+    lines.push(...fit.lines);
+    if (fit.rest.length) lines.push(`+${fit.rest.length} older row${fit.rest.length > 1 ? "s" : ""} in decisions.md - search with docsic recall <terms> or read the file`);
   }
   const extras = existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith(".md") && !["README.md", "state.md", "decisions.md"].includes(f)) : [];
   if (extras.length) lines.push(`Other hub docs (${dir}/): ${extras.join(", ")}`);
@@ -155,10 +161,12 @@ export function renderProject(hub: Hub, p: HubProject, opts: { state?: boolean; 
   if (state) { blocks.push(`--- state.md (current; rewritten each session end) ---\n${state.trim()}`); paths.push(statePath); }
   const map = memoryMap(hub, p);
   if (map.length) blocks.push(`--- memory map (index only; read sources on demand) ---\n${map.join("\n")}`);
-  const notes = opts.notes === false ? [] : openNotes(dir);
+  const notes = opts.notes === false ? [] : orderNotes(openNotes(dir));
   if (notes.length) {
-    blocks.push(`Open notes (read with the path when relevant; mark absorbed when acted on):\n${notes.map(n => `- [${n.type}] ${n.title} -> ${n.path}`).join("\n")}`);
-    paths.push(...notes.map(n => n.path));
+    const fit = takeWithin(notes, NOTES_BUDGET, n => `- [${n.type}] ${n.title} -> ${n.path}`);
+    const more = moreNotesLine(fit.rest, join(dir, "notes"));
+    blocks.push(`Open notes (read with the path when relevant; mark absorbed when acted on):\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`);
+    paths.push(...fit.shown.map(n => n.path));
   }
   return { blocks, paths };
 }

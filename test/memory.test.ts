@@ -1,7 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { HUB_SYNC_SCRIPT } from "../src/core/hub.js";
 import { absorbNote, addNote, listNotes, readState, writeState } from "../src/core/memory.js";
 import { normalizeRemote } from "../src/core/repo.js";
-import { tmpRepo } from "./helpers.js";
+import { commit, tmpRepo, write } from "./helpers.js";
 
 describe("state", () => {
   it("round-trips within budget and rejects over budget", () => {
@@ -64,5 +69,32 @@ describe("hub-backed memory", () => {
     addNote(repo, { title: "Hub note", type: "idea", body: "x" });
     expect(readFileSync(join(hubRoot, "projects", "shop", "state.md"), "utf8")).toContain("hub");
     expect(listNotes(repo)[0].data.title).toBe("Hub note");
+  });
+});
+
+describe("hub sync", () => {
+  const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
+  const sync = (hubRoot: string) => execFileSync("sh", ["-c", HUB_SYNC_SCRIPT, "sh", "mem(x): test"], { cwd: hubRoot, stdio: "ignore" });
+
+  it("commits and pushes state and notes only, and survives a hub with no notes", () => {
+    const remote = mkdtempSync(join(tmpdir(), "docsic-remote-"));
+    git(remote, "init", "-q", "--bare");
+    const hubRoot = tmpRepo();
+    git(hubRoot, "remote", "add", "origin", remote);
+    write(hubRoot, "projects/a/README.md", "curated");
+    commit(hubRoot, "init");
+    git(hubRoot, "push", "-q", "-u", "origin", "HEAD");
+
+    write(hubRoot, "projects/a/state.md", "## Now\n");
+    sync(hubRoot);
+    expect(git(hubRoot, "log", "-1", "--name-only", "--format=%s")).toBe("mem(x): test\n\nprojects/a/state.md");
+
+    write(hubRoot, "projects/a/notes/n.md", "note");
+    write(hubRoot, "projects/b/state.md", "## Now\n");
+    write(hubRoot, "projects/a/README.md", "curated edit");
+    sync(hubRoot);
+    expect(git(hubRoot, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["projects/a/notes/n.md", "projects/b/state.md"]);
+    expect(git(hubRoot, "status", "--porcelain")).toBe("M projects/a/README.md");
+    expect(git(remote, "rev-parse", "HEAD")).toBe(git(hubRoot, "rev-parse", "HEAD"));
   });
 });

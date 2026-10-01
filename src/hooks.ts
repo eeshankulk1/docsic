@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { runMechanicalChecks } from "./core/check.js";
 import { configPath } from "./core/config.js";
@@ -256,13 +256,45 @@ function identity(hub: Hub, p: HubProject): string | null {
   return out.join("\n").trim() || null;
 }
 
+/**
+ * The newest worklog entries. A repo keeps one entry file per PR under
+ * docs/worklog/<YYYY-MM>/<date>-<branch>.json (parallel PRs never touch the
+ * same file); an older repo also has the single docs/worklog.jsonl it used to
+ * append to. Both are read, and file names sort by date.
+ */
 function recentWorklog(p: HubProject, n = 3): string[] {
-  const path = p.repo ? join(p.repo, "docs", "worklog.jsonl") : "";
-  if (!path || !existsSync(path)) return [];
-  try {
-    return readFileSync(path, "utf8").trim().split("\n").slice(-n).map(l => {
+  if (!p.repo) return [];
+  const docs = join(p.repo, "docs");
+  type Entry = { date: string; summary: string; pr?: number | string };
+  const parse = (l: string): Entry | null => {
+    try {
       const e = JSON.parse(l);
-      return `- ${e.date}: ${e.summary}${e.pr ? ` (${e.pr})` : ""}`;
-    });
-  } catch { return []; }
+      return e && typeof e.date === "string" && typeof e.summary === "string" ? e : null;
+    } catch { return null; } // one bad entry never hides the rest
+  };
+  const fromOld: Entry[] = [];
+  const fromFiles: Entry[] = []; // newest first
+  // Old single file first, so on a same-date tie the newer entry files sort after it.
+  try { for (const l of readFileSync(join(docs, "worklog.jsonl"), "utf8").trim().split("\n").slice(-n)) { const e = parse(l); if (e) fromOld.push(e); } } catch { /* no single-file log */ }
+  try {
+    const dir = join(docs, "worklog");
+    let found = 0;
+    for (const month of readdirSync(dir).sort().reverse()) {
+      if (found >= n) break;
+      let names: string[];
+      try { names = readdirSync(join(dir, month)); } catch { continue; } // a stray file beside the month dirs
+      // Newest first; unreadable or malformed files do not count toward n.
+      for (const f of names.filter(f => f.endsWith(".json")).sort().reverse()) {
+        if (found >= n) break;
+        let e: Entry | null = null;
+        try { e = parse(readFileSync(join(dir, month, f), "utf8").trim()); } catch { /* unreadable entry */ }
+        if (e) { fromFiles.push(e); found++; }
+      }
+    }
+  } catch { /* no entry files */ }
+  // Stable sort over oldest-to-newest input, so same-date ties keep source/name order.
+  return [...fromOld, ...fromFiles.reverse()]
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
+    .slice(-n)
+    .map(e => `- ${e.date}: ${e.summary}${e.pr ? ` (${e.pr})` : ""}`);
 }

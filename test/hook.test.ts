@@ -92,4 +92,41 @@ describe("hooks", () => {
     expect(hook(repos, "prompt-submit", "b", { prompt: "unrelated" })).toContain("alpha v3 cut");
     expect(readFileSync(join(home, "sessions", "b.json"), "utf8")).toContain("beta");
   });
+
+  it("with a hub: recent worklog reads the entry files and the older single file", () => {
+    const repos = mkdtempSync(join(tmpdir(), "docsic-repos-"));
+    const hubRoot = join(repos, "brain");
+    write(hubRoot, "projects/gamma/state.md", "## Now\n- gamma live\n## In flight\n## Next\n");
+    const repo = join(repos, "gamma");
+    const entry = (date: string, summary: string, pr: number) => JSON.stringify({ date, project: "gamma", summary, pr }) + "\n";
+    write(repo, "docs/worklog.jsonl", entry("2026-08-01", "old one", 1) + entry("2026-09-30", "last line of the single file", 2));
+    write(repo, "docs/worklog/2026-09/2026-09-29-fix-a.json", entry("2026-09-29", "september entry", 3));
+    write(repo, "docs/worklog/2026-10/2026-10-01-feat-b.json", entry("2026-10-01", "first october entry", 4));
+    write(repo, "docs/worklog/2026-10/2026-10-02-fix-c.json", entry("2026-10-02", "newest entry", 5));
+    write(repo, "docs/worklog/2026-10/2026-10-02-broken.json", "{not json\n");
+    writeFileSync(join(process.env.DOCSIC_HOME!, "config.json"), JSON.stringify({ hub: { root: hubRoot, reposRoot: repos, sync: "none" } }));
+
+    const out = hook(repo, "session-start", "g");
+    const recent = out.slice(out.indexOf("Recent worklog:"));
+    expect(recent).toContain("- 2026-09-30: last line of the single file (2)\n- 2026-10-01: first october entry (4)\n- 2026-10-02: newest entry (5)");
+    expect(out).not.toContain("old one");
+    expect(out).not.toContain("september entry");
+
+    // A repo with entry files only.
+    const fresh = join(repos, "delta");
+    write(hubRoot, "projects/delta/state.md", "## Now\n- delta new\n## In flight\n## Next\n");
+    write(fresh, "docs/worklog/2026-10/2026-10-03-feat-d.json", entry("2026-10-03", "only entry", 9));
+    expect(hook(fresh, "session-start", "d")).toContain("Recent worklog:\n- 2026-10-03: only entry (9)");
+
+    // Same-day entries keep source then file-name order, and unusable newer files take no slot.
+    const tied = join(repos, "epsilon");
+    write(hubRoot, "projects/epsilon/state.md", "## Now\n- epsilon busy\n## In flight\n## Next\n");
+    write(tied, "docs/worklog.jsonl", entry("2026-10-05", "single-file same day", 10));
+    write(tied, "docs/worklog/2026-10/2026-10-05-a.json", entry("2026-10-05", "entry a", 11));
+    write(tied, "docs/worklog/2026-10/2026-10-05-b.json", entry("2026-10-05", "entry b", 12));
+    write(tied, "docs/worklog/2026-10/2026-10-06-x.json", "{not json\n");
+    write(tied, "docs/worklog/2026-10/2026-10-06-y.json", "");
+    write(tied, "docs/worklog/2026-10/2026-10-06-z.json", JSON.stringify({ date: "2026-10-06" }) + "\n");
+    expect(hook(tied, "session-start", "e")).toContain("Recent worklog:\n- 2026-10-05: single-file same day (10)\n- 2026-10-05: entry a (11)\n- 2026-10-05: entry b (12)");
+  });
 });

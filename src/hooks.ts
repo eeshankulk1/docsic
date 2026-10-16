@@ -1,12 +1,14 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { runAgent } from "./core/agent.js";
 import { runMechanicalChecks } from "./core/check.js";
 import { configPath } from "./core/config.js";
 import { loadHub, projectDir, readUserConfig, renderProject, resolveScope, snapshot, syncHub, workspaceSnapshot, type Hub, type HubProject } from "./core/hub.js";
 import { load } from "./core/load.js";
 import { moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./core/budget.js";
 import { memoryHome, STATE_BUDGET } from "./core/memory.js";
+import { pickSweep, startSweep, sweepTargetFor } from "./core/sweep.js";
 import { findRepoRoot, git, managedDir, managedRoot } from "./core/repo.js";
 
 /**
@@ -96,7 +98,7 @@ function sessionStart(root: string, session: string, initialized: boolean, hub: 
 /** Open notes with bodies for an initialized repo, highest-value first, within the notes budget. */
 function openNotesBlock(root: string, notes: ReturnType<typeof load>["notes"]): string {
   if (!notes.length) return "";
-  const fit = takeWithin(orderNotes(notes), NOTES_BUDGET, n => `- (${n.type}) ${n.title}: ${n.body}`);
+  const fit = takeWithin(orderNotes(notes), NOTES_BUDGET, n => `- (${n.type}${n.pinned ? ", pinned" : ""}) ${n.title}: ${n.body}`);
   const more = moreNotesLine(fit.rest, join(memoryHome(root).dir, "notes"));
   return `## Open notes\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`;
 }
@@ -150,14 +152,25 @@ function changedSince(root: string, base: string): Set<string> {
 const MIN_TRANSCRIPT_BYTES = 30_000; // trivial sessions have nothing worth distilling
 const LOCK_FRESH_MS = 10 * 60 * 1000;
 
-/** Hands off to a detached `docsic distill` so the session exits immediately. */
+/**
+ * Hands off to a detached `docsic distill` so the session exits immediately,
+ * then starts a detached note sweep when this project's open notes are due one.
+ */
 function sessionEnd(cwd: string, root: string, session: string, initialized: boolean, hub: Hub | null, scope: ReturnType<typeof resolveScope>, transcript?: string): void {
-  if (readUserConfig().distill !== "auto") return;
-  if (!transcript || !existsSync(transcript) || statSync(transcript).size < MIN_TRANSCRIPT_BYTES) return;
   const target: DistillTarget = scope?.kind === "project" && hub
     ? { kind: "hub-project", slug: scope.project.slug }
     : scope?.kind === "workspace" && !initialized ? { kind: "workspace" }
     : { kind: "repo", root };
+  const cfg = readUserConfig();
+  if (cfg.distill === "auto") distillAfter(cwd, root, session, target, transcript);
+  if (cfg.sweep === "auto") {
+    const sweep = target.kind === "workspace" ? (hub ? pickSweep(hub) : null) : sweepTargetFor(cwd);
+    if (sweep) startSweep(sweep);
+  }
+}
+
+function distillAfter(cwd: string, root: string, session: string, target: DistillTarget, transcript?: string): void {
+  if (!transcript || !existsSync(transcript) || statSync(transcript).size < MIN_TRANSCRIPT_BYTES) return;
   const key = target.kind === "hub-project" ? target.slug : target.kind === "workspace" ? "workspace" : basename(root);
   const lock = join(managedRoot(), "sessions", `distill-${key}.lock`);
   if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs < LOCK_FRESH_MS) return;
@@ -193,10 +206,9 @@ export function distill(arg: string): void {
       hub.projects.map(p => `- ${p.slug} (aliases: ${p.match.join(", ")})`).join("\n") +
       "\nDetermine from the transcript which of these (if any) the session worked on.";
   }
-  const prompt = distillPrompt(transcript, session, scopeText);
-  const agent = findAgent(prompt, dir);
-  if (!agent) return;
-  spawnSync(agent.bin, agent.args, { cwd: dir, stdio: "inherit", env: { ...process.env, DOCSIC_DISTILLER: "1" }, timeout: 15 * 60 * 1000 });
+  const ran = runAgent({ prompt: distillPrompt(transcript, session, scopeText), cwd: dir, timeoutMs: 15 * 60 * 1000,
+    tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash(jq:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(grep:*)", "Bash(wc:*)"] });
+  if (!ran) return;
   if (hub && target.kind !== "repo") syncHub(hub, target.kind === "hub-project" ? target.slug : "workspace", "distilled session");
   if (hub && target.kind === "repo") { const h = memoryHome(target.root); if (h.hub && h.slug) syncHub(h.hub, h.slug, "distilled session"); }
 }
@@ -229,21 +241,6 @@ Otherwise, for each project the session materially advanced:
    <=10 lines: the fact, why it matters, links (paths, PR/issue URLs). Never routine progress.
 
 Touch nothing except state.md and notes/. Do not commit; docsic syncs after you finish.`;
-}
-
-function findOnPath(bin: string): string | null {
-  for (const d of (process.env.PATH ?? "").split(":")) if (d && existsSync(join(d, bin))) return join(d, bin);
-  return null;
-}
-
-/** Claude Code first, Codex CLI as fallback; both confined to the memory directory. */
-function findAgent(prompt: string, dir: string): { bin: string; args: string[] } | null {
-  const claude = findOnPath("claude");
-  if (claude) return { bin: claude, args: ["-p", prompt, "--model", "sonnet", "--permission-mode", "acceptEdits",
-    "--allowedTools", "Read", "Grep", "Glob", "Write", "Edit", "Bash(jq:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(grep:*)", "Bash(wc:*)"] };
-  const codex = findOnPath("codex") ?? (existsSync("/Applications/ChatGPT.app/Contents/Resources/codex") ? "/Applications/ChatGPT.app/Contents/Resources/codex" : null);
-  if (codex) return { bin: codex, args: ["exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-C", dir, prompt] };
-  return null;
 }
 
 function identity(hub: Hub, p: HubProject): string | null {

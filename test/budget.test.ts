@@ -25,6 +25,8 @@ describe("takeWithin", () => {
     const n = (file: string, type: string) => ({ file, type });
     const out = orderNotes([n("2026-01-01-a.md", "idea"), n("2026-01-01-b.md", "gotcha"), n("2026-03-01-c.md", "gotcha"), n("2026-02-01-d.md", "decision")]);
     expect(out.map(x => x.file)).toEqual(["2026-03-01-c.md", "2026-01-01-b.md", "2026-02-01-d.md", "2026-01-01-a.md"]);
+    const pinned = orderNotes([n("2026-03-01-c.md", "gotcha"), { ...n("2026-01-01-a.md", "idea"), pinned: true }]);
+    expect(pinned.map(x => x.file)).toEqual(["2026-01-01-a.md", "2026-03-01-c.md"]);
   });
 });
 

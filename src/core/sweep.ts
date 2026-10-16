@@ -5,6 +5,7 @@ import { runAgent } from "./agent.js";
 import { noteDate } from "./budget.js";
 import { cliPath } from "./harness.js";
 import { runMechanicalChecks } from "./check.js";
+import { configPath } from "./config.js";
 import { loadHub, openNotes, projectDir, resolveScope, syncHub, type Hub, type OpenNote } from "./hub.js";
 import { ARCHIVE, archiveNoteIn, markSweptIn, memoryHome, notesIn, renewNoteIn, today } from "./memory.js";
 import { findRepoRoot, git, gitOrThrow, mainCheckout, managedRoot, repoIdentity } from "./repo.js";
@@ -394,11 +395,15 @@ function home(into: string): { where: string; path: string } {
 
 interface Landed { kept: string[]; pr: { number: number; url: string; merged: boolean } | null; merged: boolean; review?: boolean; problem?: string; reverted: Record<string, string> }
 
+/** Rules that are a repo's standard only once it ran `docsic init` (as for the Stop hook): before that, its docs may well quote commands. */
+const INIT_ONLY_RULES = new Set(["command-grade-misplaced", "agents-file-clean"]);
+
 /** Error findings by file + rule + message, counted, so a new one is visible whatever line it lands on. */
 function errorCounts(root: string): Map<string, number> {
   const m = new Map<string, number>();
+  const initialized = existsSync(configPath(root));
   for (const f of runMechanicalChecks(root)) {
-    if (f.severity !== "error") continue;
+    if (f.severity !== "error" || (!initialized && INIT_ONLY_RULES.has(f.rule))) continue;
     const k = `${f.file}\0${f.rule}\0${f.message}`;
     m.set(k, (m.get(k) ?? 0) + 1);
   }
@@ -442,9 +447,9 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
     else if (AGENT_FILES.includes(f)) { const over = agentFileOver(wt.path, f); if (over) revert(f, over, true); }
   }
   const after = errorCounts(wt.path);
-  const worse = new Set<string>();
-  for (const [k, n] of after) if (n > (baseline.get(k) ?? 0)) worse.add(k.split("\0")[0]);
-  for (const f of changedFiles(wt.path).tracked) if (worse.has(f)) revert(f, "it gained a docsic check error", true);
+  const worse = new Map<string, string>(); // file -> the rule it broke
+  for (const [k, n] of after) if (n > (baseline.get(k) ?? 0)) { const [file, rule] = k.split("\0"); if (!worse.has(file)) worse.set(file, rule); }
+  for (const f of changedFiles(wt.path).tracked) if (worse.has(f)) revert(f, `it gained a docsic check error (${worse.get(f)})`, true);
 
   const kept = changedFiles(wt.path).tracked;
   if (!kept.length) return { kept, pr: null, merged: false, reverted };

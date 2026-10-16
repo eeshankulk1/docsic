@@ -37,7 +37,7 @@ esac
 
 interface World { repos: string; hub: string; notes: string; repo: string; origin: string; home: string; ghLog: string }
 
-function world(): World {
+function world(opts: { init?: boolean } = {}): World {
   const repo0 = tmpRepo(); // sets DOCSIC_HOME
   const home = process.env.DOCSIC_HOME!;
   const repos = realpathSync(mkdtempSync(join(tmpdir(), "docsic-repos-")));
@@ -50,6 +50,7 @@ function world(): World {
   write(repo, "docs/worklog/2026-10/2026-10-01-feat-a.json", `{"date":"2026-10-01","project":"alpha","summary":"a","pr":1}\n`);
   write(repo, "CLAUDE.md", "# Alpha\n\n## Gotchas\n- one\n");
   write(repo, "src/app.ts", "export const x = 1;\n");
+  if (opts.init !== false) write(repo, "docs/docsic.json", "{}\n"); // ran docsic init: the command-grade rules apply
   commit(repo, "init");
   const origin = mkdtempSync(join(tmpdir(), "docsic-origin-"));
   git(origin, "init", "-q", "--bare");
@@ -168,7 +169,7 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(fm(join(w.notes, "2026-09-04-auth.md"))).toMatch(/renewed: \d{4}-.*\nevidence: guards src\/app.ts token checks\npinned: true/s);
     expect(fm(join(w.notes, "2026-09-05-unclear.md"))).toMatch(/^swept: \d{4}-\d{2}-\d{2}$/m);
     expect(r.notes.find(n => n.file === "2026-09-06-claude.md")!.why).toMatch(/a line added to CLAUDE.md is 402 characters/);
-    expect(r.notes.find(n => n.file === "2026-09-08-port.md")!.why).toMatch(/gained a docsic check error/);
+    expect(r.notes.find(n => n.file === "2026-09-08-port.md")!.why).toMatch(/gained a docsic check error \(command-grade-misplaced\)/);
 
     // Everything else is in the archive, with where it went and why.
     const archive = join(w.notes, "archive");
@@ -221,6 +222,12 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(r.notes.find(n => n.file === "2026-09-01-redis.md")!.why).toBe("written into docs/local-dev.md, in docs PR #7 awaiting review");
     expect(existsSync(join(w.notes, "archive/2026-09-02-cache.md"))).toBe(true);
     expect(fm(join(w.hub, "projects/alpha/state.md"))).toContain("docs PR #7 awaits review, its notes stay open until a sweep finds them covered");
+  });
+
+  it("a repo that never ran docsic init keeps a doc edit that quotes a port", async () => {
+    world({ init: false });
+    const r = (await sweep({ kind: "hub-project", slug: "alpha" }, { ...quiet, dryRun: true }))!;
+    expect(r.docs).toEqual(["docs/deploy.md", "docs/local-dev.md"]);
   });
 
   it("dry run: judges and writes, then reports and undoes", async () => {

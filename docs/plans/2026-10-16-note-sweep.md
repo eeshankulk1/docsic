@@ -1,5 +1,5 @@
 ---
-status: active
+status: done
 date: 2026-10-16
 ---
 
@@ -37,4 +37,13 @@ Done when a sweep over throu's notes leaves a short open set, every other note s
 
 ## Outcome
 
-<!-- Fill when flipping to done. -->
+Shipped as docsic 0.4.0: all three steps, as planned, with these choices and changes.
+
+- **Archive**: `notes/archive/<file>`, the note moved whole, gaining `outcome`, `archived`, `reason`, `into`. `docsic_save` absorb archives too, with an outcome. The 57 notes absorbed before the archive existed moved into it on throu's first sweep.
+- **Trigger**: more than 10 due notes (not judged by a sweep in 7 days), or a week since the last sweep; one sweep per project per 12 hours. Opt-in as `sweep: auto` (off by default; dotclaude's pin bump turns it on).
+- **Guard rails**: only existing files under `docs/` and `CLAUDE.md`/`AGENTS.md`; an instruction file stays within 80 lines with no added line over 300 characters; a doc that gains a check error is reverted, the command-grade rules only in repos that ran `init`. Hub homes are every existing doc beside `state.md` but the README, not only `decisions.md` (the dry run left notes open whose home was `app-store-launch.md`).
+- **Not merged by the sweep, this time**: Claude Code's auto mode refused to let the agent start a run that merges a PR nobody reviews, so the owner chose to review it. `--no-merge` (and `sweep: pr`) stops at the open PR; its notes stay open, and once it merges the next sweep finds them covered.
+
+throu, 2026-10-16: 137 open notes judged in five agent runs. 82 left the open set (49 covered, 24 retired, 9 absorbed into the hub's `decisions.md` and `fundraising.md`), each in the archive with its reason; `docsic recall --hub` finds them. 8 were renewed on evidence. 47 stayed open: 17 written into throu docs PR #371 (awaiting the owner's review), 12 whose doc edits were reverted by the command-grade rule (throu never ran `init`; fixed before this shipped), 18 with no clear home.
+
+So the open set went from 137 to 55, not yet short. Once #371 merges, the next sweep should find its 17 covered and place the 12, leaving about 26.

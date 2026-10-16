@@ -34,9 +34,10 @@ export interface UserConfig {
   /**
    * Note sweep: "auto" starts a background agent at session end when a
    * project's open notes are due one; it absorbs, covers, renews or retires
-   * each, and opens and merges one docs-only PR for what it absorbed.
+   * each, and opens and merges one docs-only PR for what it absorbed. "pr"
+   * does the same but leaves the PR for a person to review and merge.
    */
-  sweep?: "auto" | "off";
+  sweep?: "auto" | "pr" | "off";
 }
 
 export interface HubProject { slug: string; match: string[]; repo: string | null }

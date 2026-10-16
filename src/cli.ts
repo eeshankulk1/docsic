@@ -28,11 +28,12 @@ const HELP = `docsic - keeps a codebase legible to coding agents
                              or waived (\`Docs-skip: <doc> - <reason>\` in the PR body); exit 1 if not
   docsic load                the session-start payload, as JSON
   docsic recall <query>      search docs, notes, hub (--hub: every hub project only)
-  docsic sweep [--project <slug>] [--all] [--limit N] [--dry-run] [--json]
+  docsic sweep [--project <slug>] [--all] [--limit N] [--dry-run | --no-merge] [--json]
                              note sweep now: an agent judges each due open note (--all:
                              every open note; --limit: the N oldest) and absorbs, covers,
                              renews or retires it; absorbed content ships as one
-                             docs-only PR, merged on green. --dry-run changes nothing
+                             docs-only PR, merged on green (--no-merge: left for review).
+                             --dry-run changes nothing
   docsic config [key value]  user config at ~/.docsic/config.json (hub, distill, sweep)
   docsic serve               run the MCP server over stdio
 `;
@@ -110,7 +111,7 @@ async function main(): Promise<void> {
       const t: SweepTarget = project ? { kind: "hub-project", slug: project } : repo ? { kind: "repo", root: repo } : sweepTargetFor(process.cwd());
       const json = flags.has("--json");
       const limit = opt("--limit") ? Number(opt("--limit")) : undefined;
-      const r = await sweep(t, { dryRun: flags.has("--dry-run"), all: flags.has("--all"), auto: flags.has("--auto"), limit, log: json ? () => {} : undefined });
+      const r = await sweep(t, { dryRun: flags.has("--dry-run"), noMerge: flags.has("--no-merge"), all: flags.has("--all"), auto: flags.has("--auto"), limit, log: json ? () => {} : undefined });
       if (json) console.log(JSON.stringify(r, null, 2));
       return;
     }

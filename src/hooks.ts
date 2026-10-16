@@ -163,9 +163,9 @@ function sessionEnd(cwd: string, root: string, session: string, initialized: boo
     : { kind: "repo", root };
   const cfg = readUserConfig();
   if (cfg.distill === "auto") distillAfter(cwd, root, session, target, transcript);
-  if (cfg.sweep === "auto") {
+  if (cfg.sweep === "auto" || cfg.sweep === "pr") {
     const sweep = target.kind === "workspace" ? (hub ? pickSweep(hub) : null) : sweepTargetFor(cwd);
-    if (sweep) startSweep(sweep);
+    if (sweep) startSweep(sweep, Date.now(), { noMerge: cfg.sweep === "pr" });
   }
 }
 

@@ -208,6 +208,21 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(fm(join(w.hub, "projects/alpha/state.md"))).toContain("docs PR #7 not merged, its notes stay open");
   });
 
+  it("no-merge: opens the docs PR and stops, its notes stay open for review", async () => {
+    const w = world();
+    const r = (await sweep({ kind: "hub-project", slug: "alpha" }, { ...quiet, noMerge: true }))!;
+    expect(r.pr).toEqual({ number: 7, url: "https://github.com/x/alpha/pull/7", merged: false });
+    const calls = fm(w.ghLog);
+    expect(calls).toContain("It leaves this PR for review rather than merging it.");
+    expect(calls).not.toMatch(/^pr (checks|merge|close)/m);
+    expect(git(w.origin, "branch", "--list", "docs/*")).toMatch(/docs\/note-sweep-/); // left for the reviewer
+    expect(git(w.origin, "show", "main:docs/local-dev.md")).not.toContain("redis");
+    expect(fm(join(w.notes, "2026-09-01-redis.md"))).toMatch(/status: open[\s\S]*swept: /);
+    expect(r.notes.find(n => n.file === "2026-09-01-redis.md")!.why).toBe("written into docs/local-dev.md, in docs PR #7 awaiting review");
+    expect(existsSync(join(w.notes, "archive/2026-09-02-cache.md"))).toBe(true);
+    expect(fm(join(w.hub, "projects/alpha/state.md"))).toContain("docs PR #7 awaits review, its notes stay open until a sweep finds them covered");
+  });
+
   it("dry run: judges and writes, then reports and undoes", async () => {
     const w = world();
     const r = (await sweep({ kind: "hub-project", slug: "alpha" }, { ...quiet, dryRun: true }))!;

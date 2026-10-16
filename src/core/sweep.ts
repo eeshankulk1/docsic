@@ -124,7 +124,7 @@ export function pickSweep(hub: Hub, now = Date.now()): SweepTarget | null {
  * Session-end trigger: start a detached `docsic sweep` when the target's notes
  * are due one and no sweep of it started recently. Returns whether it started.
  */
-export function startSweep(t: SweepTarget, now = Date.now()): boolean {
+export function startSweep(t: SweepTarget, now = Date.now(), opts: { noMerge?: boolean } = {}): boolean {
   const c = resolveTarget(t);
   if (!c || !sweepDue(c.dir, now).reason) return false;
   const f = paths(c.key);
@@ -134,7 +134,7 @@ export function startSweep(t: SweepTarget, now = Date.now()): boolean {
   writeFileSync(f.marker, JSON.stringify({ started: new Date(now).toISOString() }) + "\n");
   const log = openSync(f.log, "w");
   const target = t.kind === "hub-project" ? ["--project", t.slug] : ["--repo", t.root];
-  spawn(process.execPath, [cliPath(), "sweep", ...target, "--auto"], {
+  spawn(process.execPath, [cliPath(), "sweep", ...target, "--auto", ...(opts.noMerge ? ["--no-merge"] : [])], {
     detached: true, stdio: ["ignore", log, log], env: { ...process.env, DOCSIC_DISTILLER: "1" },
   }).unref();
   return true;
@@ -143,6 +143,11 @@ export function startSweep(t: SweepTarget, now = Date.now()): boolean {
 export interface SweepOptions {
   /** Judge and write, then report and undo: no PR, no archive, no hub or state change. */
   dryRun?: boolean;
+  /**
+   * Open the docs PR and stop there: a person reviews and merges it. Its
+   * notes stay open, and once it merges a later sweep finds them covered.
+   */
+  noMerge?: boolean;
   /** Judge every open note, not only the due ones. */
   all?: boolean;
   /** Judge at most this many notes, oldest first. */
@@ -376,6 +381,7 @@ function outcome(n: OpenNote, d: Decision | undefined, docs: Landed, hubChanged:
   }
   if (!docs.kept.includes(path)) return { ...base, result: "open", why: `absorb into ${path} was not kept${docs.reverted[path] ? `: ${docs.reverted[path]}` : ""}` };
   if (dryRun) return { ...base, result: "absorbed", into: path, why: d.reason ?? `absorbed into ${path}` };
+  if (docs.review) return { ...base, result: "open", why: `written into ${path}, in docs PR #${docs.pr!.number} awaiting review` };
   if (!docs.merged) return { ...base, result: "open", why: `absorb into ${path} did not land: ${docs.problem ?? "the docs PR did not merge"}` };
   return { ...base, result: "absorbed", into: `${path} (PR #${docs.pr!.number})`, why: d.reason ?? `absorbed into ${path}` };
 }
@@ -386,7 +392,7 @@ function home(into: string): { where: string; path: string } {
   return { where: into.slice(0, i), path: into.slice(i + 1).replace(/#.*$/, "").replace(/^\.\//, "").trim() };
 }
 
-interface Landed { kept: string[]; pr: { number: number; url: string; merged: boolean } | null; merged: boolean; problem?: string; reverted: Record<string, string> }
+interface Landed { kept: string[]; pr: { number: number; url: string; merged: boolean } | null; merged: boolean; review?: boolean; problem?: string; reverted: Record<string, string> }
 
 /** Error findings by file + rule + message, counted, so a new one is visible whatever line it lands on. */
 function errorCounts(root: string): Map<string, number> {
@@ -462,7 +468,7 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
     return fail(`could not commit or push the docs branch: ${e instanceof Error ? e.message.split("\n").slice(-1)[0] : e}`);
   }
   const created = gh(wt.path, ["pr", "create", "--base", wt.defaultBranch, "--head", wt.branch,
-    "--title", `docs: note sweep ${date}`, "--body", prBody(c, wt, absorbed)]);
+    "--title", `docs: note sweep ${date}`, "--body", prBody(c, wt, absorbed, !!opts.noMerge)]);
   const url = created.out.trim().split("\n").pop() ?? "";
   const number = Number(url.match(/\/pull\/(\d+)/)?.[1] ?? 0);
   if (!created.ok || !number) {
@@ -484,6 +490,7 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
       gitOrThrow(wt.path, ["push", "-q", "origin", wt.branch]);
     } catch { return close("could not push its worklog entry"); }
   }
+  if (opts.noMerge) return { kept, pr, merged: false, review: true, reverted };
   const checks = await waitChecks(wt.path, number);
   if (checks !== "pass") return close(checks === "fail" ? "its checks failed" : "its checks did not finish in time");
   const merged = gh(wt.path, ["pr", "merge", String(number), mergeMethod(wt)]);
@@ -535,23 +542,28 @@ function worklogEntry(wt: Worktree, c: Ctx, pr: number, n: number): string | nul
   return rel;
 }
 
-function prBody(c: Ctx, wt: Worktree, absorbed: { title: string; path: string; reason: string }[]): string {
+function prBody(c: Ctx, wt: Worktree, absorbed: { title: string; path: string; reason: string }[], review: boolean): string {
   const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\s+/g, " ");
   return [
-    `Docs-only. The docsic note sweep found ${absorbed.length} open note${absorbed.length === 1 ? "" : "s"} in ${c.name}'s memory whose permanent home is one of these docs, checked each against \`${wt.base}\`, and wrote it in. It merges this PR once the checks pass.`,
+    `Docs-only. The docsic note sweep found ${absorbed.length} open note${absorbed.length === 1 ? "" : "s"} in ${c.name}'s memory whose permanent home is one of these docs, checked each against \`${wt.base}\`, and wrote it in. ${review ? "It leaves this PR for review rather than merging it." : "It merges this PR once the checks pass."}`,
     "",
     "| Note | Into | Why |",
     "|---|---|---|",
     ...absorbed.map(a => `| ${cell(a.title)} | \`${a.path}\` | ${cell(a.reason)} |`),
     "",
-    `Once this merges, each note moves to the note archive with a pointer here; \`docsic recall\` still finds it.`,
+    review
+      ? `Its notes stay open until it merges; the next sweep then finds them covered and moves them to the note archive, where \`docsic recall\` still finds them.`
+      : `Once this merges, each note moves to the note archive with a pointer here; \`docsic recall\` still finds it.`,
   ].join("\n");
 }
 
 function sweepLine(date: string, before: number, after: number, n: Record<Judged["result"], number>, docs: Landed): string {
   const parts = (["absorbed", "covered", "retired", "renewed"] as const).filter(k => n[k]).map(k => `${n[k]} ${k}`);
   if (n.open) parts.push(`${n.open} left open`);
-  const pr = docs.pr ? (docs.merged ? `; docs PR #${docs.pr.number} merged` : `; docs PR #${docs.pr.number} not merged, its notes stay open`) : docs.problem ? `; no docs PR (${docs.problem})` : "";
+  const pr = !docs.pr ? (docs.problem ? `; no docs PR (${docs.problem})` : "")
+    : docs.merged ? `; docs PR #${docs.pr.number} merged`
+    : docs.review ? `; docs PR #${docs.pr.number} awaits review, its notes stay open until a sweep finds them covered`
+    : `; docs PR #${docs.pr.number} not merged, its notes stay open`;
   return `- Note sweep ${date}: ${before} -> ${after} open notes (${parts.join(", ")})${pr}. Swept notes are in notes/${ARCHIVE}/; docsic recall finds them.`;
 }
 

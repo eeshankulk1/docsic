@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { tokenBudget } from "./budget.js";
 import { parseFrontmatter, serializeFrontmatter, type Frontmatter } from "./frontmatter.js";
 import { loadHub, projectDir, resolveScope, syncHub, type Hub } from "./hub.js";
@@ -101,6 +101,7 @@ function rewrite(path: string, change: (data: Frontmatter) => void): void {
 }
 
 function notePath(dir: string, file: string): string {
+  if (file !== basename(file) || !file.endsWith(".md")) throw new Error(`no note ${file}`);
   const p = join(dir, "notes", file);
   if (!existsSync(p)) throw new Error(`no note ${file}`);
   return p;
@@ -114,20 +115,21 @@ function notePath(dir: string, file: string): string {
  */
 export function archiveNoteIn(dir: string, file: string, r: { outcome: Outcome; reason?: string; into?: string; date?: string }): string {
   const src = notePath(dir, file);
-  rewrite(src, data => {
-    const into = r.into ?? data["absorbed-into"]; // a note absorbed before the archive existed
-    delete data["absorbed-into"];
-    delete data.pinned;
-    data.status = "archived";
-    data.outcome = r.outcome;
-    data.archived = r.date ?? today();
-    if (into) data.into = oneLine(String(into));
-    if (r.reason) data.reason = oneLine(r.reason);
-  });
+  const { data, body } = parseFrontmatter(readFileSync(src, "utf8"));
+  const into = r.into ?? data["absorbed-into"]; // a note absorbed before the archive existed
+  delete data["absorbed-into"];
+  delete data.pinned;
+  data.status = "archived";
+  data.outcome = r.outcome;
+  data.archived = r.date ?? today();
+  if (into) data.into = oneLine(String(into));
+  if (r.reason) data.reason = oneLine(r.reason);
   mkdirSync(join(dir, "notes", ARCHIVE), { recursive: true });
   let name = file;
   for (let i = 2; existsSync(join(dir, "notes", ARCHIVE, name)); i++) name = file.replace(/\.md$/, `-${i}.md`);
-  renameSync(src, join(dir, "notes", ARCHIVE, name));
+  // Write the archived copy first, then drop the original: a failure part-way never loses the note.
+  writeFileSync(join(dir, "notes", ARCHIVE, name), serializeFrontmatter(data, body));
+  rmSync(src);
   return `notes/${ARCHIVE}/${name}`;
 }
 

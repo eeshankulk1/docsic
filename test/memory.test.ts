@@ -29,6 +29,7 @@ describe("notes", () => {
     const [a] = listArchive(root);
     expect(a.data).toMatchObject({ title: "Redis gotcha", type: "gotcha", status: "archived", outcome: "absorbed", into: "docs/local-dev.md (PR #12)" });
     expect(a.body.trim()).toBe("worker needs redis");
+    expect(() => absorbNote(root, "../state.md")).toThrow(/no note/);
     expect(() => addNote(root, { title: "long", type: "idea", body: Array(12).fill("l").join("\n") })).toThrow(/max 10/);
   });
 

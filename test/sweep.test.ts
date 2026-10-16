@@ -230,6 +230,18 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(r.docs).toEqual(["docs/deploy.md", "docs/local-dev.md"]);
   });
 
+  it("reverts a doc edit no absorbed note names, and keeps the named one", async () => {
+    world({ init: false });
+    const plan = process.env.FAKE_AGENT_PLAN!;
+    const p = JSON.parse(readFileSync(plan, "utf8"));
+    p.decisions = p.decisions.filter((d: { file: string }) => d.file !== "2026-09-08-port.md"); // nothing names docs/deploy.md
+    p.decisions.find((d: { file: string }) => d.file === "2026-09-01-redis.md").into = "repo:./docs/local-dev.md#setup";
+    writeFileSync(plan, JSON.stringify(p));
+    const r = (await sweep({ kind: "hub-project", slug: "alpha" }, { ...quiet, dryRun: true }))!;
+    expect(r.docs).toEqual(["docs/local-dev.md"]);
+    expect(r.notes.find(n => n.file === "2026-09-01-redis.md")!.result).toBe("absorbed");
+  });
+
   it("dry run: judges and writes, then reports and undoes", async () => {
     const w = world();
     const r = (await sweep({ kind: "hub-project", slug: "alpha" }, { ...quiet, dryRun: true }))!;

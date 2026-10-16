@@ -208,9 +208,11 @@ async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s:
   const wt = c.repo ? addWorktree(c.repo, join(work, "repo"), log) : null;
   const problems: string[] = [];
   if (!c.repo) problems.push("no repo checkout with an origin, so no docs PR");
+  let hubFiles: HubFile[] = [];
+  let hubSettled = false;
   try {
     const baseline = wt ? errorCounts(wt.path) : new Map<string, number>();
-    const hubFiles = editableHubFiles(c);
+    hubFiles = editableHubFiles(c);
     const pinned = open.filter(n => n.pinned).map(n => n.file);
 
     const decisions = new Map<string, Decision>();
@@ -240,6 +242,7 @@ async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s:
       // Keep what the agent wrote for the reader, then put the hub back.
       for (const h of hubChanged) { writeFileSync(join(work, `hub-${h.name}`), read(h.path) ?? ""); writeFileSync(h.path, h.before); }
     }
+    hubSettled = true;
 
     const judged = judge.map(n => outcome(n, decisions.get(n.file), docs, hubChanged.map(h => h.name), opts.dryRun ?? false));
     // A pin is renewed like the note: a judged note keeps it only if the agent pins it again.
@@ -276,6 +279,8 @@ async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s:
     log(formatReport(report, work));
     return report;
   } finally {
+    // An error before the hub edits were accounted for must not leave the agent's half-written hub files behind.
+    if (!hubSettled) for (const h of hubFiles) if (read(h.path) !== h.before) writeFileSync(h.path, h.before);
     if (wt) removeWorktree(wt);
   }
 }
@@ -412,12 +417,12 @@ function errorCounts(root: string): Map<string, number> {
 
 function changedFiles(wt: string): { tracked: string[]; untracked: string[] } {
   const lines = (s: string) => s.split("\n").filter(Boolean);
-  return { tracked: lines(git(wt, ["diff", "--name-only", "HEAD"])), untracked: lines(git(wt, ["ls-files", "--others", "--exclude-standard"])) };
+  return { tracked: lines(git(wt, ["-c", "core.quotepath=false", "diff", "--name-only", "HEAD"])), untracked: lines(git(wt, ["-c", "core.quotepath=false", "ls-files", "--others", "--exclude-standard"])) };
 }
 
 /** Why a change to CLAUDE.md / AGENTS.md is over budget, or null. */
 function agentFileOver(wt: string, f: string): string | null {
-  const before = git(wt, ["show", `HEAD:${f}`]).split("\n");
+  const before = git(wt, ["show", `HEAD:${f}`]).trimEnd().split("\n");
   const after = (read(join(wt, f)) ?? "").trimEnd().split("\n");
   if (after.length > AGENT_FILE_LINES && after.length > before.length) return `${f} would be ${after.length} lines (budget ${AGENT_FILE_LINES})`;
   const old = new Set(before);
@@ -450,6 +455,10 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
   const worse = new Map<string, string>(); // file -> the rule it broke
   for (const [k, n] of after) if (n > (baseline.get(k) ?? 0)) { const [file, rule] = k.split("\0"); if (!worse.has(file)) worse.set(file, rule); }
   for (const f of changedFiles(wt.path).tracked) if (worse.has(f)) revert(f, `it gained a docsic check error (${worse.get(f)})`, true);
+
+  // An edit no absorb decision names is not a note's content: nothing explains it in the PR.
+  const claimed = new Set([...decisions.values()].flatMap(d => d.outcome === "absorb" && d.into?.startsWith("repo:") ? [home(d.into).path] : []));
+  for (const f of changedFiles(wt.path).tracked) if (!claimed.has(f)) revert(f, "no absorbed note names it", true);
 
   const kept = changedFiles(wt.path).tracked;
   if (!kept.length) return { kept, pr: null, merged: false, reverted };

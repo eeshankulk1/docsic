@@ -14,7 +14,7 @@ Two entry points over one core:
 - `docsic serve` - stdio MCP server exposing five tools: `docsic_load`, `docsic_recall`, `docsic_init`, `docsic_check`, `docsic_save`. The interface every session uses.
 - `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `gate` is the per-PR docs gate (docs whose `owns:` match a change must be edited or waived); `hook` is the harness hook entry; `distill` is the background session-end distiller; `sweep` is the note sweep; `config` edits the per-user config.
 
-The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list) is returned to the calling agent as material plus a rubric. The exceptions live outside the server, in detached processes the session-end hook starts when the user opts in: the distiller (`distill: auto`) has a headless agent CLI turn the transcript into state and notes, and the note sweep (`sweep: auto`) has one judge the open notes while docsic does the mechanical rest (the worktree, the guard rails, the docs PR, the archive).
+The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list) is returned to the calling agent as material plus a rubric. The exceptions live outside the server, in detached processes the session-end hook starts when the user opts in: the distiller (`distill: auto`) has a headless agent CLI turn the transcript into state and notes, and the note sweep (`sweep: auto` or `pr`) has one judge the open notes while docsic does the mechanical rest (the worktree, the guard rails, the docs PR, the archive).
 
 ## Repo layout
 

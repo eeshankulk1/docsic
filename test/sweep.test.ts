@@ -112,7 +112,8 @@ const fm = (path: string) => readFileSync(path, "utf8");
 const savedPath = process.env.PATH;
 const quiet = { log: () => {} };
 
-describe("note sweep", () => {
+// Each sweep runs dozens of git commands; under a parallel run that can pass the 30s default.
+describe("note sweep", { timeout: 120_000 }, () => {
   beforeEach(() => { SWEEP_TIMING.pollMs = 5; });
   afterEach(() => { process.env.PATH = savedPath; delete process.env.FAKE_GH_CHECKS; });
 

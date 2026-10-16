@@ -10,6 +10,7 @@ import { recall } from "./core/recall.js";
 import { readUserConfig, userConfigPath } from "./core/hub.js";
 import { findRepoRoot, managedDir, managedRoot } from "./core/repo.js";
 import { distill, hook } from "./hooks.js";
+import { sweep, sweepTargetFor, type SweepTarget } from "./core/sweep.js";
 import { readSettings, writeSettings } from "./core/settings.js";
 
 const [cmd, ...rest] = process.argv.slice(2);
@@ -27,7 +28,13 @@ const HELP = `docsic - keeps a codebase legible to coding agents
                              or waived (\`Docs-skip: <doc> - <reason>\` in the PR body); exit 1 if not
   docsic load                the session-start payload, as JSON
   docsic recall <query>      search docs, notes, hub (--hub: every hub project only)
-  docsic config [key value]  user config at ~/.docsic/config.json (hub, distill)
+  docsic sweep [--project <slug>] [--all] [--limit N] [--dry-run | --no-merge] [--json]
+                             note sweep now: an agent judges each due open note (--all:
+                             every open note; --limit: the N oldest) and absorbs, covers,
+                             renews or retires it; absorbed content ships as one
+                             docs-only PR, merged on green (--no-merge: left for review).
+                             --dry-run changes nothing
+  docsic config [key value]  user config at ~/.docsic/config.json (hub, distill, sweep)
   docsic serve               run the MCP server over stdio
 `;
 
@@ -99,11 +106,20 @@ async function main(): Promise<void> {
       else console.log(JSON.stringify(readSettings(root), null, 2));
       return;
     }
+    case "sweep": {
+      const project = opt("--project"), repo = opt("--repo");
+      const t: SweepTarget = project ? { kind: "hub-project", slug: project } : repo ? { kind: "repo", root: repo } : sweepTargetFor(process.cwd());
+      const json = flags.has("--json");
+      const limit = opt("--limit") ? Number(opt("--limit")) : undefined;
+      const r = await sweep(t, { dryRun: flags.has("--dry-run"), noMerge: flags.has("--no-merge"), all: flags.has("--all"), auto: flags.has("--auto"), limit, log: json ? () => {} : undefined });
+      if (json) console.log(JSON.stringify(r, null, 2));
+      return;
+    }
     case "hook": return hook(args[0], root);
     case "distill": return distill(args[0]);
     case "config": {
       // docsic config                 -> print ~/.docsic/config.json
-      // docsic config <key> <json>    -> set a top-level key (hub, distill)
+      // docsic config <key> <json>    -> set a top-level key (hub, distill, sweep)
       const cfg: any = readUserConfig();
       if (args.length === 2) {
         let v: unknown; try { v = JSON.parse(args[1]); } catch { v = args[1]; }

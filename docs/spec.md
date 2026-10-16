@@ -132,8 +132,8 @@ When several docs need the same fact, one doc owns and states it; the others lin
 | `docs/reference/` | Verbatim captured material |
 | `docs/docsic.json` | Command-grade facts: commands, ports, env var names, service URLs, model IDs |
 | State (managed) | Where things stand right now |
-| Notes (managed) | Knowledge in transit; open until absorbed |
-| Adapter settings (managed) | Per-repo choices: tracker, harness (§10). Per-user: hub, distill in `~/.docsic/config.json` |
+| Notes (managed) | Knowledge in transit; open until a session or the sweep (§8) moves it to its home or the archive |
+| Adapter settings (managed) | Per-repo choices: tracker, harness (§10). Per-user: hub, distill, sweep in `~/.docsic/config.json` |
 | `AGENTS.md` / `CLAUDE.md` | Pointers into `docs/`, plus genuine gotchas fitting no doc. **No commands.** |
 | `README.md` | The public face and a pointer to `docs/`, in a fixed shape (§5.5). Nothing version-volatile. Refreshed on a cadence, not per change (§12). |
 
@@ -192,16 +192,36 @@ Where things stand **now**. Replaced wholesale, never appended.
 ### `notes`
 An inbox, not a shelf. Knowledge in transit to future sessions.
 
-- Frontmatter: `title`, `type: discovery | gotcha | decision | idea`, `status: open | absorbed`, `created`
-- Open notes inject at session start until absorbed
-- **Absorbed means the content reached its permanent home**: a gotcha into `docs/`, a decision into the decision log, an idea into the tracker, or dropped
-- Body ≤ 10 lines. A note open past 30 days is a lint warning.
+- Frontmatter: `title`, `type: discovery | gotcha | decision | idea`, `status: open | archived`, `created`. A note a sweep left open also carries `swept` (the date); a renewed one `renewed` and `evidence`, and maybe `pinned: true`
+- Open notes inject at session start until they leave the open set; pinned notes inject first
+- Body ≤ 10 lines. A note open past 30 days (from `created`, or its last renewal) is a lint warning.
+
+Every note leaves the open set with exactly one outcome, and nothing is deleted:
+
+| Outcome | Means | Then |
+|---|---|---|
+| **Absorb** | Its content reached its permanent home: the repo doc that owns the area, `CLAUDE.md` for a gotcha that fits no doc, the hub's decision log or backlog | Archived; `into:` names the home |
+| **Covered** | A doc or the code already says it | Archived; `into:` points there |
+| **Renew** | Still true and in use, on named evidence (the code it guards, a recent PR, an open issue), never because it looks important | Stays open; may be pinned, three per project at most |
+| **Retire** | Wrong, resolved, superseded, a duplicate, or in-flight state that `state` owns | Archived with the reason |
+
+The archive is `notes/archive/`, beside the open notes. A note moves there whole, its frontmatter gaining `outcome`, `archived` (the date), `reason` and `into`. `docsic recall` searches it and labels each hit with its outcome and reason. A session archives a note through `docsic_save` (`kind: absorb`, with an `outcome` and a `reason`).
+
+### Note sweep
+Sessions file notes faster than they absorb them: one project had 135 open notes, 97 of them two weeks old or younger, while session start shows about ten. The sweep keeps the open set short and current without anyone running triage.
+
+- **Trigger.** At session end, when more than 10 open notes are due a sweep, or a week after the last one (with none yet, a week after the oldest open note). A note is due when no sweep has judged it in seven days. One sweep per project runs at a time, and a project's sweep does not start again within 12 hours.
+- **Judgment.** A detached headless agent, as for the distiller (§10), judges the due notes, 30 per run, against a fresh worktree of the repo's default branch, so each claim is checked against current main before it is written anywhere. It writes absorbed content into its home and names one outcome per note; a note whose home it cannot tell stays open rather than being guessed into a doc. The server stays model-free.
+- **Guard rails, mechanical.** The sweep keeps only edits to existing files under `docs/` and to `CLAUDE.md` / `AGENTS.md`, and reverts the rest. An instruction file stays within 80 lines and gains no line over 300 characters, since every line there costs every session. A doc that gains a `docsic check` error is reverted (the command-grade rules count only in a repo that ran `init`, as for the Stop hook). An edit that no absorbed note names is reverted too, so the PR carries nothing its notes do not explain. A note whose edit was reverted stays open.
+- **One docs-only PR per sweep**, opened, watched and merged by the sweep once its checks pass, with the merge method the repo's history shows, and a worklog entry file when the repo keeps `docs/worklog/`. Its notes are archived only once it merges; a PR that fails is closed and its notes stay open. A sweep run with `--no-merge` (or under `sweep: pr`) stops at the open PR for a person to review; its notes stay open, and once it merges the next sweep finds them covered. The project's hub docs (`decisions.md`, `backlog.md`, any other beside `state.md` but the README) are committed with the hub's memory sync, like state and notes; one with uncommitted edits is left alone.
+- **Report.** One line under `## Now` in state, replaced by the next sweep: open notes before and after, counts per outcome, the PR.
+- `docsic sweep` runs one by hand. Its dry run writes the docs patch and the decisions to the sweep's work directory and changes nothing.
 
 ### Injection budgets
 What is stored grows; what is injected must not. A project with a hundred decision rows and thirty open notes had its session-start memory grow to ~5k tokens, most of it an index nobody reads line by line. So the hooks bound the two lists that grow, and every trailer says where the rest is:
 
 - **Decision index** (hub `decisions.md`): newest rows first, up to 600 tokens, then `+N older rows in decisions.md - search with docsic recall <terms> or read the file`. The file itself keeps every row.
-- **Open notes**: ordered gotcha > decision > discovery > idea, newest first within a type, up to 400 tokens, then `+N more open notes (M open 30+ days) in <dir> - triage them: absorb each into its home or drop it`. The same budget applies to the initialized-repo payload, which shows note bodies. `docsic_load` stays complete.
+- **Open notes**: pinned first, then ordered gotcha > decision > discovery > idea, newest first within a type, up to 400 tokens, then `+N more open notes (M open 30+ days) in <dir> - triage them: absorb each into its home or drop it`. The same budget applies to the initialized-repo payload, which shows note bodies. `docsic_load` stays complete.
 - Same `ceil(chars / 4)` measure as state. Nothing is summarized or deleted; a trailer that keeps growing is the signal to triage.
 
 ### Work history
@@ -219,7 +239,7 @@ MCP is the core. It works on every harness. Five tools, and it should stay five.
 | `docsic_recall(query)` | Search across docs, notes, decisions - this repo and, when a hub is configured, all repos |
 | `docsic_init` | Scaffold and triage (§11) |
 | `docsic_check` | Violations, structured, for the agent to fix (§12) |
-| `docsic_save` | Record a state change or a note |
+| `docsic_save` | Record a state change or a note, or archive a note with its outcome |
 
 **The server has no model.** A stdio MCP server has no API key and makes no LLM calls. Anything that needs judgment - the `docsic_check` agent pass, the `docsic_init` defect list, the state distiller - is done by the *calling* agent: the tool returns the material and a rubric, the agent does the work, and reports results back through `docsic_save`. Mechanical work (§12 mechanical pass, file moves, git queries) runs inside the server.
 
@@ -254,13 +274,16 @@ Absent (default), or a git repo for cross-project memory, set per user in `~/.do
 
 ```json
 { "hub": { "root": "~/brain", "reposRoot": "~/code", "overrides": { "<slug>": { "repoDir": "...", "aliases": ["..."] } }, "skipPromptMatch": ["<slug>"], "sync": "git" },
-  "distill": "auto" }
+  "distill": "auto", "sweep": "auto" }
 ```
 
 Every folder under `<root>/projects/` is a project; archiving one (moving it out) stops its injection. A repo maps to a project when a path segment is the slug, an alias, or `<slug>-*` (worktrees), so a project needs no `docsic init` to get memory: a session that starts in a mapped repo without one gets the project's memory plus its three newest worklog entries, read from the per-PR files under `docs/worklog/<YYYY-MM>/` and the tail of the older single `docs/worklog.jsonl`, newest by `date` (a malformed entry is skipped). For a mapped repo the hub folder *is* the store: state and notes land there and are committed and pushed in the background (memory files only, never anything else). The hooks then add what one repo cannot: a snapshot of every project when the session starts in the workspace (the hub or `reposRoot`), full memory the first time a prompt names a project, and the delta when a parallel session rewrites memory. `docsic recall --hub` searches all of it. This is where a personal knowledge base plugs in. Optional, invisible to a first-time user.
 
 ### `distill`
 `off` (default) or `auto`. With `auto`, the session-end hook hands the transcript to a detached headless agent (Claude Code `claude -p` with a read/edit-only tool allowlist, or Codex in a workspace-write sandbox), confined to the memory directory. It rewrites state and files at most two notes, then docsic syncs the hub. Sessions under 30 KB of transcript are skipped; one distiller runs per project at a time. Opt-in because it spends the user's model usage.
+
+### `sweep`
+`off` (default), `auto` or `pr`. With `auto`, the session-end hook starts the note sweep (§8) for the session's project when it is due one, or for the most overdue project when the session ran in the workspace. `pr` does the same but leaves each docs PR open for the user to review and merge. Opt-in because it spends the user's model usage, and under `auto` merges docs PRs nobody reviews.
 
 ---
 

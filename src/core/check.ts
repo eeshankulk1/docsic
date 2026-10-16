@@ -125,10 +125,12 @@ export function runMechanicalChecks(root: string): Finding[] {
     const t = tokenBudget(state);
     if (t > STATE_BUDGET) findings.push({ rule: "state-budget", file: "state.md (managed)", message: `${t} tokens, budget ${STATE_BUDGET}`, severity: "error" });
   }
+  // A note renewed on evidence restarts its clock.
   const cutoff = Date.now() - 30 * 86400_000;
   for (const n of listNotes(root)) {
-    if (n.data.status === "open" && n.created && n.created.getTime() < cutoff)
-      findings.push({ rule: "note-stale", file: `notes/${n.file} (managed)`, message: `open since ${n.created.toISOString().slice(0, 10)}`, severity: "warning" });
+    const since = n.data.renewed ? new Date(String(n.data.renewed)) : n.created;
+    if (n.data.status === "open" && since && since.getTime() < cutoff)
+      findings.push({ rule: "note-stale", file: `notes/${n.file} (managed)`, message: `open since ${since.toISOString().slice(0, 10)}${n.data.renewed ? " (renewed)" : ""}`, severity: "warning" });
   }
   return findings;
 

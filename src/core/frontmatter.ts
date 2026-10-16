@@ -1,6 +1,6 @@
 export type Frontmatter = Record<string, string | string[]>;
 
-/** Minimal YAML subset: `key: value`, `key: [a, b]`, and `key:` followed by `- item` lines. */
+/** Minimal YAML subset: `key: value`, `key: "quoted # value"`, `key: [a, b]`, and `key:` followed by `- item` lines. */
 export function parseFrontmatter(text: string): { data: Frontmatter; body: string } {
   if (!text.startsWith("---")) return { data: {}, body: text };
   const end = text.indexOf("\n---", 3);
@@ -20,7 +20,9 @@ export function parseFrontmatter(text: string): { data: Frontmatter; body: strin
     const [, key, value] = kv;
     if (value === "") { data[key] = []; listKey = key; continue; }
     listKey = null;
-    if (value.startsWith("[") && value.endsWith("]")) {
+    const quoted = value.match(/^(["'])(.*)\1\s*(?:#.*)?$/);
+    if (quoted) data[key] = quoted[2];
+    else if (value.startsWith("[") && value.endsWith("]")) {
       data[key] = value.slice(1, -1).split(",").map(s => unquote(s.trim())).filter(Boolean);
     } else {
       data[key] = unquote(value.replace(/\s+#.*$/, ""));
@@ -31,8 +33,13 @@ export function parseFrontmatter(text: string): { data: Frontmatter; body: strin
 
 export function serializeFrontmatter(data: Frontmatter, body: string): string {
   const lines = Object.entries(data).map(([k, v]) =>
-    Array.isArray(v) ? `${k}: [${v.join(", ")}]` : `${k}: ${v}`);
+    Array.isArray(v) ? `${k}: [${v.join(", ")}]` : `${k}: ${scalar(v)}`);
   return `---\n${lines.join("\n")}\n---\n\n${body.replace(/^\n+/, "")}`;
+}
+
+/** Quote a value the parser would otherwise cut (` #...` reads as a comment) or read as a list. */
+function scalar(v: string): string {
+  return /\s#|^["'[]/.test(v) ? `"${v}"` : v;
 }
 
 function unquote(s: string): string {

@@ -35,9 +35,10 @@ export function noteDate(n: { file: string; created?: string | null }): string {
   return (n.created ?? "").slice(0, 10) || n.file.match(/^\d{4}-\d{2}-\d{2}/)?.[0] || "";
 }
 
-/** Injection order: gotcha > decision > discovery > idea, newest first within a type. */
-export function orderNotes<T extends { file: string; type: string; created?: string | null }>(notes: T[]): T[] {
+/** Injection order: pinned notes, then gotcha > decision > discovery > idea, newest first within a type. */
+export function orderNotes<T extends { file: string; type: string; created?: string | null; pinned?: boolean }>(notes: T[]): T[] {
   return [...notes].sort((a, b) =>
+    Number(!!b.pinned) - Number(!!a.pinned) ||
     (TYPE_RANK[a.type] ?? 4) - (TYPE_RANK[b.type] ?? 4) || noteDate(b).localeCompare(noteDate(a)) || b.file.localeCompare(a.file));
 }
 

@@ -3,7 +3,7 @@ import * as z from "zod/v4";
 import { runMechanicalChecks } from "./core/check.js";
 import { agentRubric, apply, triage } from "./core/init.js";
 import { load } from "./core/load.js";
-import { absorbNote, addNote, NOTE_TYPES, writeState } from "./core/memory.js";
+import { absorbNote, addNote, NOTE_TYPES, OUTCOMES, writeState } from "./core/memory.js";
 import { recall } from "./core/recall.js";
 import { findRepoRoot } from "./core/repo.js";
 import { readConfig, writeConfig } from "./core/config.js";
@@ -59,7 +59,7 @@ export function createServer(): McpServer {
   });
 
   server.registerTool("docsic_save", {
-    description: "Write memory. kind=state replaces the whole state snapshot (sections ## Now / ## In flight / ## Next, budget 800 tokens). kind=note files a discovery|gotcha|decision|idea (body <= 10 lines). kind=absorb marks a note absorbed once its content reached a permanent home. kind=config merges command-grade facts into docs/docsic.json.",
+    description: "Write memory. kind=state replaces the whole state snapshot (sections ## Now / ## In flight / ## Next, budget 800 tokens). kind=note files a discovery|gotcha|decision|idea (body <= 10 lines). kind=absorb moves a note out of the open set into the note archive (recall still finds it): outcome absorbed (its content reached a permanent home, named in absorbedInto), covered (a doc or the code already says it; absorbedInto points there) or retired (wrong or out of date; reason says why). kind=config merges command-grade facts into docs/docsic.json.",
     inputSchema: z.object({
       cwd: cwdArg,
       kind: z.enum(["state", "note", "absorb", "config"]),
@@ -67,12 +67,14 @@ export function createServer(): McpServer {
       title: z.string().optional().describe("note only"),
       type: z.enum(NOTE_TYPES).optional().describe("note only"),
       absorbedInto: z.string().optional().describe("absorb only: where the content now lives"),
+      outcome: z.enum(OUTCOMES).optional().describe("absorb only: absorbed (default), covered or retired"),
+      reason: z.string().optional().describe("absorb only: one line on why, kept in the archive"),
     }),
-  }, async ({ cwd, kind, content, title, type, absorbedInto }) => {
+  }, async ({ cwd, kind, content, title, type, absorbedInto, outcome, reason }) => {
     const root = findRepoRoot(cwd);
     if (kind === "state") return text(writeState(root, content ?? ""));
     if (kind === "note") return text({ file: addNote(root, { title: title ?? "untitled", type: type ?? "discovery", body: content ?? "" }) });
-    if (kind === "absorb") { absorbNote(root, content ?? "", absorbedInto); return text({ absorbed: content }); }
+    if (kind === "absorb") return text({ archived: absorbNote(root, content ?? "", absorbedInto, { outcome, reason }), outcome: outcome ?? "absorbed" });
     const cfg = readConfig(root) ?? { updated: "", stacks: [] };
     const patch = JSON.parse(content ?? "{}");
     writeConfig(root, deepMerge(cfg, patch));

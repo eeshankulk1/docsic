@@ -32,6 +32,11 @@ export function findRepoRoot(cwd: string = process.cwd()): string {
   return out || resolve(cwd);
 }
 
+/** The main checkout a worktree belongs to (the first `git worktree list` entry); `root` itself when it is one, or no repo. */
+export function mainCheckout(root: string): string {
+  return git(root, ["worktree", "list", "--porcelain"]).match(/^worktree (.+)$/m)?.[1] ?? root;
+}
+
 /** ssh/https collapse, .git dropped, lowercased. Repos with no remote key by root-path hash. */
 export function normalizeRemote(url: string): string {
   let u = url.trim().toLowerCase();

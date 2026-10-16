@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -91,6 +91,21 @@ describe("hooks", () => {
     write(hubRoot, "projects/alpha/state.md", "## Now\n- alpha v3 cut\n## In flight\n## Next\n");
     expect(hook(repos, "prompt-submit", "b", { prompt: "unrelated" })).toContain("alpha v3 cut");
     expect(readFileSync(join(home, "sessions", "b.json"), "utf8")).toContain("beta");
+  });
+
+  it("with sweep auto: session end starts a sweep for a project whose notes are due", () => {
+    const repos = mkdtempSync(join(tmpdir(), "docsic-repos-"));
+    const hubRoot = join(repos, "brain");
+    for (let i = 0; i < 3; i++) write(hubRoot, `projects/zeta/notes/2026-01-0${i + 1}-n.md`, `---\ntitle: n${i}\ntype: idea\nstatus: open\ncreated: 2026-01-0${i + 1}\n---\nx\n`);
+    write(hubRoot, "projects/eta/notes/2026-01-01-n.md", "---\ntitle: n\ntype: idea\nstatus: open\ncreated: 2099-01-01\n---\nx\n");
+    mkdirSync(join(repos, "zeta"), { recursive: true });
+    mkdirSync(join(repos, "eta"), { recursive: true });
+    const home = process.env.DOCSIC_HOME!;
+    writeFileSync(join(home, "config.json"), JSON.stringify({ hub: { root: hubRoot, reposRoot: repos, sync: "none" }, sweep: "auto" }));
+    hook(join(repos, "eta"), "session-end", "s-eta");
+    expect(existsSync(join(home, "sweeps", "eta.json"))).toBe(false); // its one note is not due yet
+    hook(join(repos, "zeta"), "session-end", "s-zeta");
+    expect(JSON.parse(readFileSync(join(home, "sweeps", "zeta.json"), "utf8")).started).toMatch(/^\d{4}-/);
   });
 
   it("with a hub: recent worklog reads the entry files and the older single file", () => {

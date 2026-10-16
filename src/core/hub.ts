@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { DECISIONS_BUDGET, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./budget.js";
+import { parseFrontmatter } from "./frontmatter.js";
 import { managedRoot } from "./repo.js";
 
 /**
@@ -30,6 +31,13 @@ export interface UserConfig {
   hub?: HubConfig;
   /** Session-end distiller: "auto" spawns a background agent that rewrites state and files notes. */
   distill?: "auto" | "off";
+  /**
+   * Note sweep: "auto" starts a background agent at session end when a
+   * project's open notes are due one; it absorbs, covers, renews or retires
+   * each, and opens and merges one docs-only PR for what it absorbed. "pr"
+   * does the same but leaves the PR for a person to review and merge.
+   */
+  sweep?: "auto" | "pr" | "off";
 }
 
 export interface HubProject { slug: string; match: string[]; repo: string | null }
@@ -90,7 +98,7 @@ function readIf(p: string, max = 8192): string | null {
   try { return existsSync(p) ? readFileSync(p, "utf8").slice(0, max) : null; } catch { return null; }
 }
 
-export interface OpenNote { file: string; path: string; title: string; type: string; created: string | null }
+export interface OpenNote { file: string; path: string; title: string; type: string; created: string | null; pinned: boolean; swept: string | null }
 
 export function openNotes(dir: string): OpenNote[] {
   const nd = join(dir, "notes");
@@ -98,13 +106,16 @@ export function openNotes(dir: string): OpenNote[] {
   const out: OpenNote[] = [];
   for (const f of readdirSync(nd).filter(f => f.endsWith(".md")).sort()) {
     const path = join(nd, f);
-    const head = readIf(path, 2048) ?? "";
-    if (!/^status:\s*open\s*$/m.test(head)) continue;
+    const { data } = parseFrontmatter(readIf(path, 4096) ?? "");
+    if (data.status !== "open") continue;
+    const str = (k: string) => (typeof data[k] === "string" && data[k] ? String(data[k]).trim() : null);
     out.push({
       file: f, path,
-      title: (head.match(/^title:\s*(.+)$/m)?.[1] ?? f.replace(/\.md$/, "")).trim(),
-      type: (head.match(/^type:\s*(.+)$/m)?.[1] ?? "note").trim(),
-      created: head.match(/^created:\s*(.+)$/m)?.[1]?.trim() ?? null,
+      title: str("title") ?? f.replace(/\.md$/, ""),
+      type: str("type") ?? "note",
+      created: str("created"),
+      pinned: data.pinned === "true",
+      swept: str("swept"),
     });
   }
   return out;
@@ -163,7 +174,7 @@ export function renderProject(hub: Hub, p: HubProject, opts: { state?: boolean; 
   if (map.length) blocks.push(`--- memory map (index only; read sources on demand) ---\n${map.join("\n")}`);
   const notes = opts.notes === false ? [] : orderNotes(openNotes(dir));
   if (notes.length) {
-    const fit = takeWithin(notes, NOTES_BUDGET, n => `- [${n.type}] ${n.title} -> ${n.path}`);
+    const fit = takeWithin(notes, NOTES_BUDGET, n => `- [${n.type}${n.pinned ? ", pinned" : ""}] ${n.title} -> ${n.path}`);
     const more = moreNotesLine(fit.rest, join(dir, "notes"));
     blocks.push(`Open notes (read with the path when relevant; mark absorbed when acted on):\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`);
     paths.push(...fit.shown.map(n => n.path));
@@ -206,21 +217,23 @@ export function snapshot(hub: Hub): Record<string, number> {
 }
 
 /**
- * Stages state.md files and notes, commits, pulls, pushes; `$1` is the message.
- * Wildcard pathspecs must match files (a bare `projects/*\/notes` matches
- * nothing), and one add per pathspec keeps a hub with no notes yet from
- * failing the whole add.
+ * Stages state.md files and notes (the archive under notes/ included), plus
+ * any further pathspecs passed after the message, then commits, pulls,
+ * pushes; `$1` is the message. Wildcard pathspecs must match files (a bare
+ * `projects/*\/notes` matches nothing), and one add per pathspec keeps a hub
+ * with no notes yet from failing the whole add.
  */
-export const HUB_SYNC_SCRIPT = `git add -A -- 'projects/*/state.md' 2>/dev/null; git add -A -- 'projects/*/notes/*' 2>/dev/null; (git diff --cached --quiet || git commit -q -m "$1") && git pull -q --rebase --autostash && git push -q`;
+export const HUB_SYNC_SCRIPT = `m="$1"; shift; git add -A -- 'projects/*/state.md' 2>/dev/null; git add -A -- 'projects/*/notes/*' 2>/dev/null; for p in "$@"; do git add -A -- "$p" 2>/dev/null; done; (git diff --cached --quiet || git commit -q -m "$m") && git pull -q --rebase --autostash && git push -q`;
 
 /**
- * Commit memory changes (state.md and notes/ only) and push, in the background.
+ * Commit memory changes (state.md and notes/, plus `extra` hub paths a note
+ * sweep wrote, like a project's decisions.md) and push, in the background.
  * Never stages anything else; a failed push leaves the commit local.
  */
-export function syncHub(hub: Hub, slug: string, summary: string): void {
+export function syncHub(hub: Hub, slug: string, summary: string, extra: string[] = []): void {
   if (hub.sync !== "git") return;
   const msg = `mem(${slug}): ${summary}`.slice(0, 120);
-  spawn("sh", ["-c", HUB_SYNC_SCRIPT, "sh", msg], {
+  spawn("sh", ["-c", HUB_SYNC_SCRIPT, "sh", msg, ...extra], {
     cwd: hub.root, detached: true, stdio: "ignore",
     env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
   }).unref();

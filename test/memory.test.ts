@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { HUB_SYNC_SCRIPT } from "../src/core/hub.js";
-import { absorbNote, addNote, listNotes, readState, writeState } from "../src/core/memory.js";
+import { parseFrontmatter, serializeFrontmatter } from "../src/core/frontmatter.js";
+import { absorbNote, addNote, archiveNoteIn, listArchive, listNotes, markSweptIn, memoryHome, readState, renewNoteIn, writeState } from "../src/core/memory.js";
 import { normalizeRemote } from "../src/core/repo.js";
 import { commit, tmpRepo, write } from "./helpers.js";
 
@@ -19,13 +20,42 @@ describe("state", () => {
 });
 
 describe("notes", () => {
-  it("adds, lists, absorbs, caps body length", () => {
+  it("adds, lists, absorbs into the archive, caps body length", () => {
     const root = tmpRepo();
     const f = addNote(root, { title: "Redis gotcha", type: "gotcha", body: "worker needs redis" });
     expect(listNotes(root)[0].data.status).toBe("open");
-    absorbNote(root, f, "docs/local-dev.md");
-    expect(listNotes(root)[0].data.status).toBe("absorbed");
+    expect(absorbNote(root, f, "docs/local-dev.md (PR #12)")).toBe(`notes/archive/${f}`);
+    expect(listNotes(root)).toEqual([]);
+    const [a] = listArchive(root);
+    expect(a.data).toMatchObject({ title: "Redis gotcha", type: "gotcha", status: "archived", outcome: "absorbed", into: "docs/local-dev.md (PR #12)" });
+    expect(a.body.trim()).toBe("worker needs redis");
+    expect(() => absorbNote(root, "../state.md")).toThrow(/no note/);
     expect(() => addNote(root, { title: "long", type: "idea", body: Array(12).fill("l").join("\n") })).toThrow(/max 10/);
+  });
+
+  it("archives with each outcome, renews on evidence, pins and unpins", () => {
+    const root = tmpRepo();
+    const dir = memoryHome(root).dir;
+    const covered = addNote(root, { title: "a", type: "discovery", body: "x" });
+    const retired = addNote(root, { title: "b", type: "idea", body: "y" });
+    const kept = addNote(root, { title: "c", type: "gotcha", body: "z" });
+    absorbNote(root, covered, "docs/api.md", { outcome: "covered", reason: "api.md#auth says it" });
+    archiveNoteIn(dir, retired, { outcome: "retired", reason: "the cache it\nwarns about is gone" });
+    renewNoteIn(dir, kept, { evidence: "guards src/cache.ts, touched in #40", pin: true, date: "2026-10-16" });
+    expect(listArchive(root).map(n => [n.data.outcome, n.data.reason])).toEqual([["covered", "api.md#auth says it"], ["retired", "the cache it warns about is gone"]]);
+    expect(listNotes(root)[0].data).toMatchObject({ status: "open", renewed: "2026-10-16", swept: "2026-10-16", evidence: "guards src/cache.ts, touched in #40", pinned: "true" });
+    renewNoteIn(dir, kept, { evidence: "still guards it" });
+    expect(listNotes(root)[0].data.pinned).toBeUndefined();
+    markSweptIn(dir, kept, "2026-10-20");
+    expect(listNotes(root)[0].data.swept).toBe("2026-10-20");
+  });
+});
+
+describe("frontmatter", () => {
+  it("quotes a value the parser would cut at ' #'", () => {
+    const text = serializeFrontmatter({ into: "docs/x.md (PR #7)", list: ["a", "b"], plain: "ok: yes" }, "body\n");
+    expect(parseFrontmatter(text).data).toEqual({ into: "docs/x.md (PR #7)", list: ["a", "b"], plain: "ok: yes" });
+    expect(parseFrontmatter("---\nk: v # comment\n---\n").data.k).toBe("v");
   });
 });
 
@@ -96,5 +126,12 @@ describe("hub sync", () => {
     expect(git(hubRoot, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["projects/a/notes/n.md", "projects/b/state.md"]);
     expect(git(hubRoot, "status", "--porcelain")).toBe("M projects/a/README.md");
     expect(git(remote, "rev-parse", "HEAD")).toBe(git(hubRoot, "rev-parse", "HEAD"));
+
+    // A sweep also stages the hub files it wrote, and the archive under notes/.
+    write(hubRoot, "projects/a/decisions.md", "| 2026-10-16 | d | r |\n");
+    write(hubRoot, "projects/a/notes/archive/n.md", "archived");
+    execFileSync("sh", ["-c", HUB_SYNC_SCRIPT, "sh", "mem(a): sweep", "projects/a/decisions.md"], { cwd: hubRoot, stdio: "ignore" });
+    expect(git(hubRoot, "show", "--name-only", "--format=", "HEAD").split("\n").sort()).toEqual(["projects/a/decisions.md", "projects/a/notes/archive/n.md"]);
+    expect(git(hubRoot, "status", "--porcelain")).toBe("M projects/a/README.md");
   });
 });

@@ -9,6 +9,7 @@ Keeps a codebase legible to coding agents, and keeps that legibility true as the
 - Checks the docs against the code, and gates each PR on the docs its change owns
 - Keeps project memory (state, notes, decisions) outside the repo, optionally in one hub across all your projects
 - Distills each session into that memory when it ends (opt-in)
+- Sweeps open notes into the docs that own them, archiving the rest with a reason, so the open set stays short (opt-in)
 
 Docs are for people and live in your repo. Everything else is for the agent and lives outside it.
 

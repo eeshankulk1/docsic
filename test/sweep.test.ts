@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { recall } from "../src/core/recall.js";
-import { PIN_LIMIT, startSweep, sweep, sweepDue, SWEEP_BUDGET, SWEEP_TIMING } from "../src/core/sweep.js";
+import { applyCarry, carryNudge, PIN_LIMIT, startSweep, sweep, sweepDue, SWEEP_BUDGET, SWEEP_TIMING } from "../src/core/sweep.js";
 import { commit, tmpRepo, write } from "./helpers.js";
 
 const git = (cwd: string, ...a: string[]) => execFileSync("git", a, { cwd, encoding: "utf8" }).trim();
@@ -14,7 +14,7 @@ const doc = (owns: string, text: string) => `---\nowns: [${owns}]\nstatus: curre
 
 // Stand-ins for the agent CLI and gh, first on PATH. The agent writes the
 // decisions and edits the test hands it; gh records its calls, and its
-// "merge" pushes the PR branch to origin's main.
+// "merge" pushes the PR branch to origin's main; "pr view" prints FAKE_GH_VIEW, or finds no PR.
 const FAKE_CLAUDE = `#!/usr/bin/env node
 const fs = require("fs"), path = require("path");
 const plan = JSON.parse(fs.readFileSync(process.env.FAKE_AGENT_PLAN, "utf8"));
@@ -32,6 +32,7 @@ case "$1 $2" in
   "pr create") echo "https://github.com/x/alpha/pull/7" ;;
   "pr checks") echo "[{\\"name\\":\\"Docs gate\\",\\"bucket\\":\\"\${FAKE_GH_CHECKS:-pass}\\"}]" ;;
   "pr merge") git push -q origin HEAD:main ;;
+  "pr view") [ -n "$FAKE_GH_VIEW" ] && echo "$FAKE_GH_VIEW" || exit 1 ;;
 esac
 `;
 
@@ -112,11 +113,15 @@ function world(opts: { init?: boolean } = {}): World {
 const fm = (path: string) => readFileSync(path, "utf8");
 const savedPath = process.env.PATH;
 const quiet = { log: () => {} };
+const alpha = { kind: "hub-project", slug: "alpha" } as const;
+const pr9 = (state: string) => JSON.stringify({ number: 9, state, url: "https://github.com/x/alpha/pull/9" });
+const CLI = join(__dirname, "..", "src", "cli.ts");
+const TSX = join(__dirname, "..", "node_modules", ".bin", "tsx");
 
 // Each sweep runs dozens of git commands; under a parallel run that can pass the 30s default.
 describe("note sweep", { timeout: 120_000 }, () => {
   beforeEach(() => { SWEEP_TIMING.pollMs = 5; });
-  afterEach(() => { process.env.PATH = savedPath; delete process.env.FAKE_GH_CHECKS; });
+  afterEach(() => { process.env.PATH = savedPath; delete process.env.FAKE_GH_CHECKS; delete process.env.FAKE_GH_VIEW; });
 
   it("is due past the budget, or a week after the last sweep", () => {
     const dir = mkdtempSync(join(tmpdir(), "docsic-due-"));
@@ -256,6 +261,89 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(fm(join(w.home, "sweeps/alpha/docs.patch"))).toContain("+Start redis before the worker.");
     expect(fm(join(w.hub, "projects/alpha/state.md"))).not.toContain("Note sweep");
     expect(git(w.repo, "branch", "--list", "docs/*")).toBe("");
+  });
+
+  it("carry: stages the docs edits, a branch with an open PR takes them, and its notes archive once they reach main", async () => {
+    const w = world();
+    const carryFile = join(w.home, "sweeps/alpha.carry.json");
+    const r = (await sweep(alpha, { ...quiet, carry: true }))!;
+    expect(r.pr).toBeNull();
+    expect(existsSync(w.ghLog) ? fm(w.ghLog) : "").not.toMatch(/^pr create/m);
+    const [carry] = JSON.parse(fm(carryFile)).carries;
+    expect(carry.files).toEqual(["docs/local-dev.md"]);
+    expect(carry.patch).toContain("+Start redis before the worker.");
+    expect(fm(join(w.notes, "2026-09-01-redis.md"))).toContain("status: open");
+    expect(r.notes.find(n => n.file === "2026-09-01-redis.md")!.why).toBe("written into docs/local-dev.md, waiting to ride the next PR");
+    expect(existsSync(join(w.notes, "archive/2026-09-03-old.md"))).toBe(true); // the other outcomes apply at once
+    expect(fm(join(w.hub, "projects/alpha/state.md"))).toContain("the docs edits for 1 of them wait to ride the next PR");
+    expect(fm(join(w.home, "sweeps/alpha/prompt-1.txt"))).toContain("carries the rest into the repo's next PR");
+
+    // While no PR has them, no new sweep starts.
+    expect(await sweep(alpha, { ...quiet, carry: true, all: true })).toBeNull();
+
+    // Not asked on main, nor on a branch with no open PR; the Stop hook asks a branch with one, once per session.
+    expect(carryNudge(w.repo)).toBeNull();
+    git(w.repo, "checkout", "-q", "-b", "feat/x");
+    expect(carryNudge(w.repo)).toBeNull();
+    process.env.FAKE_GH_VIEW = pr9("OPEN");
+    expect(carryNudge(w.repo)).toMatch(/absorbed 1 note into docs\/local-dev\.md.*PR #9 on this branch\. Run `docsic sweep apply`/);
+    const stop = () => execFileSync(TSX, [CLI, "hook", "stop"], { input: JSON.stringify({ cwd: w.repo, session_id: "s1" }), encoding: "utf8", env: process.env });
+    expect(JSON.parse(stop())).toMatchObject({ decision: "block", reason: expect.stringContaining("docsic sweep apply") });
+    expect(stop()).toBe("");
+
+    expect(applyCarry(w.repo).message).toMatch(/wrote the sweep edits for 1 note into docs\/local-dev\.md\. Commit and push them to PR #9/);
+    expect(fm(join(w.repo, "docs/local-dev.md"))).toContain("Start redis before the worker.");
+    expect(carryNudge(w.repo)).toBeNull();
+
+    // Riding an open PR, the edits block no sweep: their note is not judged again and their doc is left alone.
+    const r2 = (await sweep(alpha, { ...quiet, carry: true, all: true }))!;
+    expect(r2.notes.map(n => n.file)).not.toContain("2026-09-01-redis.md");
+    expect(fm(join(w.home, "sweeps/alpha/prompt-1.txt"))).toContain("Not docs/local-dev.md: earlier sweep edits to it wait in an open PR");
+    expect(JSON.parse(fm(carryFile)).carries).toHaveLength(1);
+
+    commit(w.repo, "feat x");
+    git(w.repo, "push", "-q", "origin", "feat/x:main"); // the PR merges
+    process.env.FAKE_GH_VIEW = pr9("MERGED");
+    await sweep(alpha, { ...quiet, carry: true });
+    expect(fm(join(w.notes, "archive/2026-09-01-redis.md"))).toMatch(/outcome: absorbed[\s\S]*into: "docs\/local-dev\.md \(PR #9\)"/);
+    expect(existsSync(carryFile)).toBe(false);
+    expect(fm(join(w.hub, "projects/alpha/state.md"))).toMatch(/^- Note sweep \S+: 1 note carried with PR #9 landed; 4 open notes\./m);
+  });
+
+  it("carry: edits no PR picks up in a week go out as a docs-only PR, merged on green", async () => {
+    const w = world();
+    const carryFile = join(w.home, "sweeps/alpha.carry.json");
+    await sweep(alpha, { ...quiet, carry: true });
+    const j = JSON.parse(fm(carryFile));
+    j.carries[0].date = "2026-01-01";
+    writeFileSync(carryFile, JSON.stringify(j));
+    const r = (await sweep(alpha, { ...quiet, carry: true, all: true }))!;
+    expect(r.pr).toMatchObject({ number: 7, merged: true });
+    expect(git(w.origin, "show", "main:docs/local-dev.md")).toContain("Start redis before the worker.");
+    expect(fm(join(w.notes, "archive/2026-09-01-redis.md"))).toContain('into: "docs/local-dev.md (PR #7)"');
+    expect(existsSync(carryFile)).toBe(false);
+  });
+
+  it("carry: dropped when it no longer applies, or when the PR that carried it closes without it", async () => {
+    const w = world();
+    const carryFile = join(w.home, "sweeps/alpha.carry.json");
+    await sweep(alpha, { ...quiet, carry: true });
+    git(w.repo, "checkout", "-q", "-b", "feat/y");
+    write(w.repo, "docs/local-dev.md", doc("src/**", "# Local dev\n\nRewritten."));
+    expect(applyCarry(w.repo).message).toContain("no longer apply here");
+    expect(existsSync(carryFile)).toBe(false);
+    expect(fm(join(w.notes, "2026-09-01-redis.md"))).toContain("status: open");
+
+    git(w.repo, "checkout", "-q", "--", "docs/local-dev.md");
+    await sweep(alpha, { ...quiet, carry: true, all: true }); // judges it again and stages fresh edits
+    process.env.FAKE_GH_VIEW = pr9("OPEN");
+    applyCarry(w.repo);
+    process.env.FAKE_GH_VIEW = pr9("CLOSED");
+    const lines: string[] = [];
+    await sweep(alpha, { log: l => lines.push(l), carry: true });
+    expect(lines).toContain("sweep: dropped the edits carried for 1 note (PR #9 closed without them); they are judged again");
+    expect(fm(join(w.notes, "2026-09-01-redis.md"))).toContain("status: open");
+    expect(existsSync(carryFile)).toBe(false);
   });
 
   it("the session-end hook starts a sweep when one is due, once per retry window", () => {

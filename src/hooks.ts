@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { runAgent } from "./core/agent.js";
 import { runMechanicalChecks } from "./core/check.js";
 import { configPath } from "./core/config.js";
@@ -8,8 +8,8 @@ import { loadHub, projectDir, readUserConfig, renderProject, resolveScope, snaps
 import { load } from "./core/load.js";
 import { moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./core/budget.js";
 import { memoryHome, STATE_BUDGET } from "./core/memory.js";
-import { pickSweep, startSweep, sweepTargetFor } from "./core/sweep.js";
-import { findRepoRoot, git, managedDir, managedRoot } from "./core/repo.js";
+import { carryNudge, pickSweep, startSweep, sweepTargetFor } from "./core/sweep.js";
+import { findRepoRoot, git, managedRoot } from "./core/repo.js";
 
 /**
  * Harness hook entry points (Claude Code, and Codex via the same payload shape).
@@ -19,6 +19,8 @@ import { findRepoRoot, git, managedDir, managedRoot } from "./core/repo.js";
  * Two independent triggers:
  * - the repo ran `docsic init` (docs/docsic.json exists): docs payload, Stop gate
  * - a hub is configured and the cwd maps to a hub project or the workspace: memory injection
+ * The Stop hook also asks a session whose branch has an open PR to carry
+ * waiting note sweep edits into it, in either case.
  */
 interface Payload { cwd?: string; session_id?: string; prompt?: string; transcript_path?: string; stop_hook_active?: boolean }
 
@@ -50,7 +52,7 @@ export async function hook(event: string, fallbackRoot: string): Promise<void> {
 
   if (event === "session-start") return sessionStart(root, session, initialized, hub, scope);
   if (event === "prompt-submit") return promptSubmit(session, p.prompt ?? "", hub);
-  if (event === "stop") return stop(root, session, initialized, p);
+  if (event === "stop") return stop(cwd, root, session, initialized, p);
   if (event === "session-end") return sessionEnd(cwd, root, session, initialized, hub, scope, p.transcript_path);
 }
 
@@ -130,17 +132,22 @@ function promptSubmit(session: string, prompt: string, hub: Hub | null): void {
   if (out.length) console.log(out.join("\n\n"));
 }
 
-function stop(root: string, session: string, initialized: boolean, p: Payload): void {
-  if (!initialized || p.stop_hook_active) return; // never loop
-  // Gate only on files this session touched: pre-existing debt is surfaced at
-  // session start, not blamed on a session that never went near it.
-  const touched = changedSince(root, readMarker(session)?.head ?? "");
-  const errors = runMechanicalChecks(root).filter(f => f.severity === "error" && touched.has(f.file));
-  if (!errors.length) return;
-  const gate = join(managedDir(root), `gate-${session}`);
-  if (existsSync(gate)) return; // one nudge per session
-  writeFileSync(gate, "");
-  console.log(JSON.stringify({ decision: "block", reason: `docsic_check has ${errors.length} error(s). Fix them or say why not:\n` + errors.slice(0, 15).map(e => `- ${e.rule} ${e.file}${e.line ? ":" + e.line : ""}: ${e.message}`).join("\n") }));
+/** Blocks once per session for each of: check errors in files the session touched, sweep edits that can ride this branch's open PR. */
+function stop(cwd: string, root: string, session: string, initialized: boolean, p: Payload): void {
+  if (p.stop_hook_active) return; // never loop
+  const reasons: string[] = [];
+  const asked = (name: string) => join(dirname(markerPath(session)), `${name}-${session}`);
+  const ask = (name: string, reason: string) => { writeFileSync(asked(name), ""); reasons.push(reason); };
+  if (initialized && !existsSync(asked("gate"))) {
+    // Gate only on files this session touched: pre-existing debt is surfaced at
+    // session start, not blamed on a session that never went near it.
+    const touched = changedSince(root, readMarker(session)?.head ?? "");
+    const errors = runMechanicalChecks(root).filter(f => f.severity === "error" && touched.has(f.file));
+    if (errors.length) ask("gate", `docsic_check has ${errors.length} error(s). Fix them or say why not:\n` + errors.slice(0, 15).map(e => `- ${e.rule} ${e.file}${e.line ? ":" + e.line : ""}: ${e.message}`).join("\n"));
+  }
+  const carry = existsSync(asked("carry")) ? null : carryNudge(cwd);
+  if (carry) ask("carry", carry);
+  if (reasons.length) console.log(JSON.stringify({ decision: "block", reason: reasons.join("\n\n") }));
 }
 
 /** Files changed since `base` (committed, staged, unstaged or untracked), relative to the repo root. */
@@ -163,9 +170,9 @@ function sessionEnd(cwd: string, root: string, session: string, initialized: boo
     : { kind: "repo", root };
   const cfg = readUserConfig();
   if (cfg.distill === "auto") distillAfter(cwd, root, session, target, transcript);
-  if (cfg.sweep === "auto" || cfg.sweep === "pr") {
+  if (cfg.sweep === "auto" || cfg.sweep === "pr" || cfg.sweep === "carry") {
     const sweep = target.kind === "workspace" ? (hub ? pickSweep(hub) : null) : sweepTargetFor(cwd);
-    if (sweep) startSweep(sweep, Date.now(), { noMerge: cfg.sweep === "pr" });
+    if (sweep) startSweep(sweep, Date.now(), { noMerge: cfg.sweep === "pr", carry: cfg.sweep === "carry" });
   }
 }
 

@@ -12,9 +12,9 @@ A CLI + MCP server that keeps a codebase legible to coding agents and keeps that
 Two entry points over one core:
 
 - `docsic serve` - stdio MCP server exposing five tools: `docsic_load`, `docsic_recall`, `docsic_init`, `docsic_check`, `docsic_save`. The interface every session uses.
-- `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `gate` is the per-PR docs gate (docs whose `owns:` match a change must be edited or waived); `hook` is the harness hook entry; `distill` is the background session-end distiller; `sweep` is the note sweep; `config` edits the per-user config.
+- `docsic <cmd>` - the CLI. `init` registers the server with every detected harness (Claude Code, Codex, Cursor) and triages the repo; `check` is the same mechanical pass for CI; `gate` is the per-PR docs gate (docs whose `owns:` match a change must be edited or waived); `hook` is the harness hook entry; `distill` is the background session-end distiller; `sweep` is the note sweep (`sweep apply` writes its staged edits into the current checkout); `config` edits the per-user config.
 
-The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list) is returned to the calling agent as material plus a rubric. The exceptions live outside the server, in detached processes the session-end hook starts when the user opts in: the distiller (`distill: auto`) has a headless agent CLI turn the transcript into state and notes, and the note sweep (`sweep: auto` or `pr`) has one judge the open notes while docsic does the mechanical rest (the worktree, the guard rails, the docs PR, the archive).
+The server has no model. Judgment work (the agent pass of `docsic_check`, the init defect list) is returned to the calling agent as material plus a rubric. The exceptions live outside the server, in detached processes the session-end hook starts when the user opts in: the distiller (`distill: auto`) has a headless agent CLI turn the transcript into state and notes, and the note sweep (`sweep: auto`, `pr` or `carry`) has one judge the open notes while docsic does the mechanical rest (the worktree, the guard rails, the docs PR or the edits staged to ride the next PR, the archive).
 
 ## Repo layout
 
@@ -23,7 +23,7 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 | `src/cli.ts` | Command dispatch |
 | `src/hooks.ts` | Hook handlers (session start, prompt submit, stop, session end) and the distiller |
 | `src/core/agent.ts` | Finds and runs the headless agent CLI (Claude Code, else Codex) for the distiller and the sweep |
-| `src/core/sweep.ts` | The note sweep: trigger, worktree, agent prompt, guard rails on its edits, the docs PR, outcomes into the archive, the state line |
+| `src/core/sweep.ts` | The note sweep: trigger, worktree, agent prompt, guard rails on its edits, the docs PR or the carry (edits staged for the next PR, the Stop hook's ask, `sweep apply`, settling once they land), outcomes into the archive, the state line |
 | `src/server.ts` | MCP tool registrations; the agent-pass rubric |
 | `src/core/repo.ts` | Repo root, remote-URL identity, managed store location |
 | `src/core/docs.ts` | Reads `docs/`, classifies files (hub, narrative, plan, reference, config) |
@@ -45,7 +45,7 @@ The server has no model. Judgment work (the agent pass of `docsic_check`, the in
 ## Storage
 
 - Repo: `docs/` only, including `docs/docsic.json` for command-grade facts.
-- Managed: `~/.docsic/<slug>-<hash>/` with `state.md`, `notes/` (and `notes/archive/` for notes that left the open set), `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in docsic.json) relocates the root. `~/.docsic/config.json` is the per-user config (hub, distill, sweep); `~/.docsic/sessions/` holds per-session hook markers and distiller logs; `~/.docsic/sweeps/` holds each project's sweep marker, lock, log and work directory (the notes handed to the agent, its decisions, the repo worktree while it runs).
+- Managed: `~/.docsic/<slug>-<hash>/` with `state.md`, `notes/` (and `notes/archive/` for notes that left the open set), `settings.json`. Keyed by normalized remote URL so worktrees share one store; an environment override (named in docsic.json) relocates the root. `~/.docsic/config.json` is the per-user config (hub, distill, sweep); `~/.docsic/sessions/` holds per-session hook markers (head at start, the once-per-session Stop asks) and distiller logs; `~/.docsic/sweeps/` holds each project's sweep marker, lock, log, carry (`<key>.carry.json`: staged edits as a patch, with their notes and the branch that took them) and work directory (the notes handed to the agent, its decisions, the repo worktree while it runs).
 - Hub (optional): a git repo with `projects/<slug>/` folders. When the config names one and a repo maps to a project (path segment equals the slug, an alias, or `<slug>-*`), that folder replaces the managed store for state and notes, writes are committed and pushed in the background, and the hooks add workspace-wide memory: a one-line-per-project snapshot outside any project, a project's memory on its first mention in a prompt (state, plus decision and open-note indexes held to a token budget), and deltas written by parallel sessions.
 
 ## Docs index

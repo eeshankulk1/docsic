@@ -16,7 +16,8 @@ import { findRepoRoot, git, gitOrThrow, mainCheckout, managedRoot, repoIdentity 
  * judges it (absorb, covered, renew, retire) and writes absorbed content into
  * its home; this module does everything mechanical around that judgment:
  * the trigger, the repo worktree, the guard rails on what the agent edited,
- * the docs-only PR (opened, watched, merged), the archive, the state line.
+ * the docs-only PR (opened, watched, merged) or the carry (the edits staged
+ * on this machine to ride the next PR into the repo), the archive, the state line.
  */
 
 /** A sweep starts when more open notes than this are due one... */
@@ -55,9 +56,9 @@ export type SweepTarget = { kind: "hub-project"; slug: string } | { kind: "repo"
 const daysSince = (date: string, now: number) => (now - Date.parse(date)) / DAY;
 const isDue = (n: OpenNote, now: number) => !n.swept || daysSince(n.swept, now) >= SWEEP_EVERY_DAYS;
 
-/** Open notes due a sweep, and why a sweep should start now (null: not yet). */
-export function sweepDue(dir: string, now = Date.now()): { open: OpenNote[]; due: OpenNote[]; reason: string | null } {
-  const open = openNotes(dir);
+/** Open notes due a sweep, and why a sweep should start now (null: not yet). `skip`: notes whose edits ride a PR. */
+export function sweepDue(dir: string, now = Date.now(), skip = new Set<string>()): { open: OpenNote[]; due: OpenNote[]; reason: string | null } {
+  const open = openNotes(dir).filter(n => !skip.has(n.file));
   const due = open.filter(n => isDue(n, now));
   if (!due.length) return { open, due, reason: null };
   if (due.length > SWEEP_BUDGET) return { open, due, reason: `${due.length} open notes due, budget ${SWEEP_BUDGET}` };
@@ -104,8 +105,9 @@ function repoWithOrigin(p: string | null): string | null {
 
 function paths(key: string) {
   const root = join(managedRoot(), "sweeps");
-  return { root, work: join(root, key), marker: join(root, `${key}.json`), lock: join(root, `${key}.lock`), log: join(root, `${key}.log`) };
+  return { root, work: join(root, key), marker: join(root, `${key}.json`), lock: join(root, `${key}.lock`), log: join(root, `${key}.log`), carry: join(root, `${key}.carry.json`) };
 }
+type Paths = ReturnType<typeof paths>;
 
 function readJson<T>(p: string): T | null {
   try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; }
@@ -115,7 +117,7 @@ function readJson<T>(p: string): T | null {
 export function pickSweep(hub: Hub, now = Date.now()): SweepTarget | null {
   let best: { slug: string; n: number } | null = null;
   for (const p of hub.projects) {
-    const d = sweepDue(projectDir(hub, p.slug), now);
+    const d = sweepDue(projectDir(hub, p.slug), now, carriedNotes(readCarries(paths(p.slug))));
     if (d.reason && (!best || d.due.length > best.n)) best = { slug: p.slug, n: d.due.length };
   }
   return best ? { kind: "hub-project", slug: best.slug } : null;
@@ -123,19 +125,22 @@ export function pickSweep(hub: Hub, now = Date.now()): SweepTarget | null {
 
 /**
  * Session-end trigger: start a detached `docsic sweep` when the target's notes
- * are due one and no sweep of it started recently. Returns whether it started.
+ * are due one, or carried edits wait to be settled, and no sweep of it started
+ * recently. Returns whether it started.
  */
-export function startSweep(t: SweepTarget, now = Date.now(), opts: { noMerge?: boolean } = {}): boolean {
+export function startSweep(t: SweepTarget, now = Date.now(), opts: { noMerge?: boolean; carry?: boolean } = {}): boolean {
   const c = resolveTarget(t);
-  if (!c || !sweepDue(c.dir, now).reason) return false;
+  if (!c) return false;
   const f = paths(c.key);
+  const carries = readCarries(f);
+  if (!carries.length && !sweepDue(c.dir, now).reason) return false;
   const last = readJson<{ started?: string }>(f.marker)?.started;
   if (last && now - Date.parse(last) < SWEEP_TIMING.retryMs) return false;
   mkdirSync(f.root, { recursive: true });
   writeFileSync(f.marker, JSON.stringify({ started: new Date(now).toISOString() }) + "\n");
   const log = openSync(f.log, "w");
   const target = t.kind === "hub-project" ? ["--project", t.slug] : ["--repo", t.root];
-  spawn(process.execPath, [cliPath(), "sweep", ...target, "--auto", ...(opts.noMerge ? ["--no-merge"] : [])], {
+  spawn(process.execPath, [cliPath(), "sweep", ...target, "--auto", ...(opts.noMerge ? ["--no-merge"] : []), ...(opts.carry ? ["--carry"] : [])], {
     detached: true, stdio: ["ignore", log, log], env: { ...process.env, DOCSIC_DISTILLER: "1" },
   }).unref();
   return true;
@@ -149,6 +154,14 @@ export interface SweepOptions {
    * notes stay open, and once it merges a later sweep finds them covered.
    */
   noMerge?: boolean;
+  /**
+   * Stage the docs edits on this machine instead of opening a PR: the Stop
+   * hook asks the next session whose branch has an open PR to write them in
+   * (`docsic sweep apply`), so they ride that PR. Notes are archived once the
+   * edits reach the default branch. Edits no PR picks up in a week expire,
+   * and that sweep lands its docs as its own PR.
+   */
+  carry?: boolean;
   /** Judge every open note, not only the due ones. */
   all?: boolean;
   /** Judge at most this many notes, oldest first. */
@@ -180,7 +193,7 @@ export async function sweep(t: SweepTarget, opts: SweepOptions = {}): Promise<Sw
   const started = new Date().toISOString();
   if (!opts.dryRun) writeFileSync(f.marker, JSON.stringify({ started }) + "\n");
   try {
-    const report = await sweepLocked(c, f.work, opts, log);
+    const report = await sweepLocked(c, f, opts, log);
     if (!opts.dryRun) writeFileSync(f.marker, JSON.stringify({ started, finished: new Date().toISOString(), result: report?.line ?? "nothing to sweep" }) + "\n");
     return report;
   } finally {
@@ -192,19 +205,27 @@ function alive(pid: number): boolean {
   try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
-async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s: string) => void): Promise<SweepReport | null> {
+async function sweepLocked(c: Ctx, f: Paths, opts: SweepOptions, log: (s: string) => void): Promise<SweepReport | null> {
   const date = today();
   if (!opts.dryRun) {
     const moved = migrateAbsorbed(c.dir);
     if (moved) log(`sweep: moved ${moved} absorbed note${moved > 1 ? "s" : ""} into notes/${ARCHIVE}/`);
+    const settled = settleCarries(c, f, log);
+    if (settled.waiting) {
+      log(`sweep: the edits for ${plural(settled.waiting.notes.length, "absorbed note")} wait to ride the next PR (${settled.waiting.files.join(", ")}); no new sweep until a PR picks them up`);
+      return null;
+    }
+    if (settled.expired) opts = { ...opts, carry: false }; // the fallback: this sweep lands its docs as its own PR
   }
-  const { open, due, reason } = sweepDue(c.dir);
+  // Edits riding an open PR: their notes are not judged again, and their docs stay as they are until it merges.
+  const riding = readCarries(f);
+  const { open, due, reason } = sweepDue(c.dir, Date.now(), carriedNotes(riding));
   if (opts.auto && !reason) { log("sweep: not due"); return null; }
   const judge = (opts.all ? open : due).slice(0, opts.limit ?? Infinity);
   if (!judge.length) { log("sweep: no open notes to judge"); return null; }
   log(`sweep ${c.name}: judging ${judge.length} of ${open.length} open notes${reason ? ` (${reason})` : ""}`);
 
-  const work = resetWork(workDir, c.repo);
+  const work = resetWork(f.work, c.repo);
   const wt = c.repo ? addWorktree(c.repo, join(work, "repo"), log) : null;
   const problems: string[] = [];
   if (!c.repo) problems.push("no repo checkout with an origin, so no docs PR");
@@ -222,7 +243,7 @@ async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s:
       const bundle = join(work, `notes-${i + 1}.md`), out = join(work, `sweep-${i + 1}.json`);
       writeFileSync(bundle, batch.map(n => `### ${n.file}\n\n${readFileSync(n.path, "utf8").trim()}\n`).join("\n"));
       const ran = runAgent({
-        prompt: sweepPrompt({ name: c.name, bundle, out, count: batch.length, wt, hubFiles, pinned, date }),
+        prompt: sweepPrompt({ name: c.name, bundle, out, count: batch.length, wt, hubFiles, pinned, date, carry: !!opts.carry, busy: [...busyFiles(riding).keys()] }),
         cwd: wt?.path ?? work, addDirs: [work, c.dir], tools: AGENT_TOOLS, timeoutMs: SWEEP_TIMING.agentMs,
       });
       if (!ran) { log("sweep: no agent CLI (claude or codex) on PATH"); break; }
@@ -235,7 +256,7 @@ async function sweepLocked(c: Ctx, workDir: string, opts: SweepOptions, log: (s:
       return null;
     }
 
-    const docs: Landed = wt ? await landDocs(wt, c, judge, decisions, baseline, opts, log) : { kept: [], pr: null, merged: false, reverted: {} };
+    const docs: Landed = wt ? await landDocs(wt, c, f, judge, decisions, baseline, busyFiles(riding), opts, log) : { kept: [], pr: null, merged: false, reverted: {} };
     if (docs.problem) problems.push(docs.problem);
     const hubChanged = hubFiles.filter(h => read(h.path) !== h.before);
     if (opts.dryRun) {
@@ -314,8 +335,7 @@ interface Worktree { repo: string; path: string; branch: string; base: string; d
 /** A worktree on a new branch from the remote default branch: the sweep checks notes against current main. */
 function addWorktree(repo: string, path: string, log: (s: string) => void): Worktree | null {
   git(repo, ["fetch", "-q", "origin"]);
-  const head = git(repo, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]); // origin/main
-  const base = head || ["origin/main", "origin/master"].find(b => git(repo, ["rev-parse", "--verify", "-q", b])) || "";
+  const base = originDefault(repo);
   if (!base) { log(`sweep: ${repo} has no origin default branch; no docs PR`); return null; }
   const stamp = new Date().toISOString().replace(/[-:]/g, "").slice(0, 13).toLowerCase(); // 20261016t0830
   const branch = `docs/note-sweep-${stamp}`;
@@ -326,6 +346,12 @@ function addWorktree(repo: string, path: string, log: (s: string) => void): Work
     return null;
   }
   return { repo, path, branch, base, defaultBranch: base.replace(/^origin\//, "") };
+}
+
+/** origin's default branch as a ref (origin/main), or "" when origin has none. */
+function originDefault(repo: string): string {
+  return git(repo, ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"])
+    || ["origin/main", "origin/master"].find(b => git(repo, ["rev-parse", "--verify", "-q", b])) || "";
 }
 
 function removeWorktree(wt: Worktree): void {
@@ -387,6 +413,7 @@ function outcome(n: OpenNote, d: Decision | undefined, docs: Landed, hubChanged:
   }
   if (!docs.kept.includes(path)) return { ...base, result: "open", why: `absorb into ${path} was not kept${docs.reverted[path] ? `: ${docs.reverted[path]}` : ""}` };
   if (dryRun) return { ...base, result: "absorbed", into: path, why: d.reason ?? `absorbed into ${path}` };
+  if (docs.carried) return { ...base, result: "open", why: `written into ${path}, waiting to ride the next PR` };
   if (docs.review) return { ...base, result: "open", why: `written into ${path}, in docs PR #${docs.pr!.number} awaiting review` };
   if (!docs.merged) return { ...base, result: "open", why: `absorb into ${path} did not land: ${docs.problem ?? "the docs PR did not merge"}` };
   return { ...base, result: "absorbed", into: `${path} (PR #${docs.pr!.number})`, why: d.reason ?? `absorbed into ${path}` };
@@ -398,7 +425,7 @@ function home(into: string): { where: string; path: string } {
   return { where: into.slice(0, i), path: into.slice(i + 1).replace(/#.*$/, "").replace(/^\.\//, "").trim() };
 }
 
-interface Landed { kept: string[]; pr: { number: number; url: string; merged: boolean } | null; merged: boolean; review?: boolean; problem?: string; reverted: Record<string, string> }
+interface Landed { kept: string[]; pr: { number: number; url: string; merged: boolean } | null; merged: boolean; review?: boolean; carried?: number; problem?: string; reverted: Record<string, string> }
 
 /** Rules that are a repo's standard only once it ran `docsic init` (as for the Stop hook): before that, its docs may well quote commands. */
 const INIT_ONLY_RULES = new Set(["command-grade-misplaced", "agents-file-clean"]);
@@ -413,6 +440,13 @@ function errorCounts(root: string): Map<string, number> {
     m.set(k, (m.get(k) ?? 0) + 1);
   }
   return m;
+}
+
+/** `git diff HEAD` untrimmed: a trimmed patch loses a final blank context line and no longer applies. */
+function diffHead(wt: string): string {
+  const r = spawnSync("git", ["diff", "HEAD"], { cwd: wt, encoding: "utf8", maxBuffer: 64 << 20 });
+  if (r.status !== 0 || r.error || !r.stdout) throw new Error(`git diff HEAD failed: ${r.error?.message || r.stderr?.trim() || "empty diff"}`); // never store an empty or cut-off patch
+  return r.stdout;
 }
 
 function changedFiles(wt: string): { tracked: string[]; untracked: string[] } {
@@ -431,13 +465,14 @@ function agentFileOver(wt: string, f: string): string | null {
 }
 
 /**
- * Guard rails, then the PR. The agent may only have edited existing docs and
- * the agent instruction files; anything else is reverted, as is an
- * instruction file pushed past its budget and a doc that gained a check
- * error. What is left goes out as one docs-only PR, merged once its checks
+ * Guard rails, then the PR or the carry. The agent may only have edited
+ * existing docs and the agent instruction files; anything else is reverted, as
+ * is an instruction file pushed past its budget, a doc that gained a check
+ * error, and a doc whose carried edits still ride an open PR. What is left is
+ * staged as a carry, or goes out as one docs-only PR, merged once its checks
  * pass; on any failure the PR is closed and its notes stay open.
  */
-async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<string, Decision>, baseline: Map<string, number>, opts: SweepOptions, log: (s: string) => void): Promise<Landed> {
+async function landDocs(wt: Worktree, c: Ctx, fp: Paths, judge: OpenNote[], decisions: Map<string, Decision>, baseline: Map<string, number>, busy: Map<string, string>, opts: SweepOptions, log: (s: string) => void): Promise<Landed> {
   const reverted: Record<string, string> = {};
   const revert = (f: string, why: string, tracked: boolean) => {
     if (tracked) git(wt.path, ["checkout", "HEAD", "--", f]); else rmSync(join(wt.path, f), { force: true });
@@ -448,6 +483,7 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
   for (const f of first.untracked) revert(f, "the sweep edits existing files only", false);
   for (const f of first.tracked) {
     if (!existsSync(join(wt.path, f))) revert(f, "the sweep deletes nothing", true);
+    else if (busy.has(f)) revert(f, `earlier sweep edits to it ride ${busy.get(f)}, not merged yet`, true);
     else if (!f.startsWith("docs/") && !AGENT_FILES.includes(f)) revert(f, "outside docs/ and the agent instruction files", true);
     else if (AGENT_FILES.includes(f)) { const over = agentFileOver(wt.path, f); if (over) revert(f, over, true); }
   }
@@ -463,7 +499,7 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
   const kept = changedFiles(wt.path).tracked;
   if (!kept.length) return { kept, pr: null, merged: false, reverted };
   if (opts.dryRun) {
-    writeFileSync(join(dirname(wt.path), "docs.patch"), git(wt.path, ["diff", "HEAD"]) + "\n");
+    writeFileSync(join(dirname(wt.path), "docs.patch"), diffHead(wt.path));
     return { kept, pr: null, merged: false, reverted };
   }
 
@@ -471,8 +507,14 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
   const absorbed = judge.flatMap(n => {
     const d = decisions.get(n.file);
     const path = d?.outcome === "absorb" && d.into?.startsWith("repo:") ? home(d.into).path : null;
-    return path && kept.includes(path) ? [{ title: n.title, path, reason: d!.reason ?? "" }] : [];
+    return path && kept.includes(path) ? [{ file: n.file, title: n.title, path, reason: d!.reason ?? "" }] : [];
   });
+  if (opts.carry) {
+    const carry: Carry = { date, base: wt.base, patch: diffHead(wt.path), files: kept, notes: absorbed.map(a => ({ file: a.file, title: a.title, into: a.path, reason: a.reason })) };
+    writeCarries(fp, [...readCarries(fp), carry]);
+    log(`sweep: staged edits to ${kept.join(", ")} to ride the next PR`);
+    return { kept, pr: null, merged: false, carried: absorbed.length, reverted };
+  }
   const fail = (problem: string, pr: Landed["pr"] = null): Landed => { log(`sweep: ${problem}`); return { kept, pr, merged: false, problem, reverted }; };
   try {
     gitOrThrow(wt.path, ["add", "--", ...kept]);
@@ -514,8 +556,165 @@ async function landDocs(wt: Worktree, c: Ctx, judge: OpenNote[], decisions: Map<
   return { kept, pr: { ...pr, merged: true }, merged: true, reverted };
 }
 
-function gh(cwd: string, args: string[]): { ok: boolean; out: string; err: string } {
-  const r = spawnSync("gh", args, { cwd, encoding: "utf8", env: { ...process.env, GH_PROMPT_DISABLED: "1" } });
+/**
+ * A carry: docs edits a sweep staged on this machine to ride the next PR into
+ * the repo, and the notes they absorb. `applied` is set once a session wrote
+ * them onto a branch (`docsic sweep apply`).
+ */
+interface Carry {
+  date: string; base: string; patch: string; files: string[];
+  notes: { file: string; title: string; into: string; reason: string }[];
+  applied?: { branch: string; pr?: number; date: string };
+}
+
+function readCarries(f: Paths): Carry[] {
+  return readJson<{ carries?: Carry[] }>(f.carry)?.carries ?? [];
+}
+
+function writeCarries(f: Paths, carries: Carry[]): void {
+  if (!carries.length) { rmSync(f.carry, { force: true }); return; }
+  mkdirSync(f.root, { recursive: true });
+  writeFileSync(f.carry, JSON.stringify({ carries }, null, 2) + "\n");
+}
+
+const carriedNotes = (carries: Carry[]) => new Set(carries.flatMap(x => x.notes.map(n => n.file)));
+const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+/** Docs whose carried edits ride a branch, and where: a later sweep leaves them alone until those land. */
+function busyFiles(carries: Carry[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const x of carries) if (x.applied) for (const file of x.files) m.set(file, x.applied.pr ? `PR #${x.applied.pr}` : `branch ${x.applied.branch}`);
+  return m;
+}
+
+/** `git apply` with the patch on stdin; `env` can point it at a scratch index. */
+function gitApply(cwd: string, patch: string, args: string[], env: Record<string, string> = {}): boolean {
+  return spawnSync("git", ["apply", ...args], { cwd, input: patch, stdio: ["pipe", "ignore", "ignore"], env: { ...process.env, ...env } }).status === 0;
+}
+
+/** Where a carry's edits stand on `base`, read through a scratch index: already there, still applying cleanly, or neither. */
+function onBase(repo: string, base: string, patch: string, scratch: string): "landed" | "applies" | "stale" {
+  const env = { GIT_INDEX_FILE: scratch };
+  try {
+    if (spawnSync("git", ["read-tree", base], { cwd: repo, stdio: "ignore", env: { ...process.env, ...env } }).status !== 0) return "stale";
+    if (gitApply(repo, patch, ["--cached", "--check", "--reverse"], env)) return "landed";
+    return gitApply(repo, patch, ["--cached", "--check"], env) ? "applies" : "stale";
+  } finally {
+    rmSync(scratch, { force: true });
+  }
+}
+
+/** The PR for `ref` (a number or a branch; the checked-out branch when omitted), or null when there is none. */
+function prView(cwd: string, ref?: string): { number: number; state: "OPEN" | "MERGED" | "CLOSED"; url: string } | null {
+  const r = gh(cwd, ["pr", "view", ...(ref ? [ref] : []), "--json", "number,state,url"], 15_000); // the Stop hook waits on it
+  if (!r.ok) return null;
+  try { const j = JSON.parse(r.out); return typeof j?.number === "number" ? j : null; } catch { return null; }
+}
+
+/**
+ * Settles each carry before a sweep does anything else. Edits now on the
+ * default branch: their notes move to the archive as absorbed. Edits that can
+ * no longer land (the PR that carried them closed or merged without them, a
+ * branch that opened no PR in a week, a default branch that changed under
+ * them) are dropped, and their notes are judged again. Edits no PR picked up
+ * in a week expire, and this sweep lands its docs as its own PR. Any other
+ * unpicked carry is `waiting`, and the sweep stops there: the next PR takes it.
+ */
+function settleCarries(c: Ctx, f: Paths, log: (s: string) => void): { waiting?: Carry; expired?: boolean } {
+  const carries = readCarries(f);
+  if (!carries.length) return {};
+  if (c.repo) git(c.repo, ["fetch", "-q", "origin"]);
+  const base = c.repo ? originDefault(c.repo) : "";
+  const now = Date.now();
+  const keep: Carry[] = [];
+  const done: string[] = [];
+  let waiting: Carry | undefined, expired = false;
+  for (const x of carries) {
+    const notes = plural(x.notes.length, "note");
+    const drop = (why: string) => { done.push(`dropped the edits carried for ${notes} (${why})`); log(`sweep: dropped the edits carried for ${notes} (${why}); they are judged again`); };
+    if (!c.repo || !base) { drop("no repo checkout with an origin default branch"); continue; }
+    const where = onBase(c.repo, base, x.patch, `${f.carry}.index`);
+    if (where === "landed") {
+      const via = x.applied ? (x.applied.pr ? `PR #${x.applied.pr}` : x.applied.branch) : base;
+      for (const n of x.notes) {
+        try { archiveNoteIn(c.dir, n.file, { outcome: "absorbed", into: `${n.into} (${via})`, reason: n.reason || `absorbed into ${n.into}` }); }
+        catch (e) { log(`sweep: left ${n.file} as it is: ${e instanceof Error ? e.message : e}`); } // a session archived it meanwhile
+      }
+      done.push(`${notes} carried with ${via} landed`);
+      log(`sweep: the edits carried for ${notes} reached ${base} with ${via}; archived them`);
+      continue;
+    }
+    if (x.applied) {
+      const pr = prView(c.repo, x.applied.pr ? String(x.applied.pr) : x.applied.branch);
+      if (pr && pr.state !== "OPEN") drop(`PR #${pr.number} ${pr.state.toLowerCase()} without them`);
+      else if (!pr && daysSince(x.applied.date, now) >= SWEEP_EVERY_DAYS) drop(`branch ${x.applied.branch} opened no PR in ${SWEEP_EVERY_DAYS} days`);
+      else keep.push(x);
+      continue;
+    }
+    if (where === "stale") drop(`${base} changed under them`);
+    else if (daysSince(x.date, now) >= SWEEP_EVERY_DAYS) { drop(`no PR picked them up in ${SWEEP_EVERY_DAYS} days`); expired = true; }
+    else { keep.push(x); waiting = x; }
+  }
+  writeCarries(f, keep);
+  if (done.length) {
+    writeSweepLine(c.dir, `- Note sweep ${today()}: ${done.join("; ")}; ${plural(openNotes(c.dir).length, "open note")}. Swept notes are in notes/${ARCHIVE}/; docsic recall finds them.`);
+    if (c.hub && c.slug) syncHub(c.hub, c.slug, `note sweep: ${done.join("; ")}`);
+  }
+  return { waiting, expired };
+}
+
+/** The unpicked carry for the repo `cwd` is in, if any. */
+function pendingCarry(cwd: string): { root: string; f: Paths; carries: Carry[]; carry: Carry } | null {
+  try { if (!readdirSync(join(managedRoot(), "sweeps")).some(n => n.endsWith(".carry.json"))) return null; } catch { return null; }
+  const root = findRepoRoot(cwd);
+  if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true") return null;
+  const c = resolveTarget({ kind: "repo", root: mainCheckout(root) });
+  if (!c) return null;
+  const f = paths(c.key);
+  const carries = readCarries(f);
+  const carry = carries.find(x => !x.applied);
+  return carry ? { root, f, carries, carry } : null;
+}
+
+/**
+ * For the Stop hook: when sweep edits wait to ride a PR and this session's
+ * branch has an open one, what to ask the session to do; else null.
+ */
+export function carryNudge(cwd: string): string | null {
+  try { return nudge(cwd); } catch { return null; } // the Stop hook must never fail on this
+}
+
+function nudge(cwd: string): string | null {
+  const p = pendingCarry(cwd);
+  if (!p) return null;
+  const branch = git(p.root, ["symbolic-ref", "--short", "-q", "HEAD"]);
+  if (!branch || `origin/${branch}` === originDefault(p.root)) return null;
+  const pr = prView(p.root);
+  if (pr?.state !== "OPEN") return null;
+  return `docsic: the note sweep absorbed ${plural(p.carry.notes.length, "note")} into ${p.carry.files.join(", ")}, and those edits wait to ride the next PR into this repo: PR #${pr.number} on this branch. Run \`docsic sweep apply\`, then commit and push them with this PR.`;
+}
+
+/** `docsic sweep apply`: writes the waiting sweep edits into this checkout, so they ride its branch's PR. */
+export function applyCarry(cwd: string): { ok: boolean; message: string } {
+  const p = pendingCarry(cwd);
+  if (!p) return { ok: true, message: "docsic: no note sweep edits wait to ride a PR here" };
+  const { root, f, carries, carry } = p;
+  const notes = plural(carry.notes.length, "note");
+  if (gitApply(root, carry.patch, ["--check"])) {
+    if (!gitApply(root, carry.patch, [])) return { ok: false, message: "docsic: git apply failed; nothing changed" };
+  } else if (!gitApply(root, carry.patch, ["--check", "--reverse"])) { // not already here either
+    writeCarries(f, carries.filter(x => x !== carry));
+    return { ok: true, message: `docsic: the sweep edits for ${notes} no longer apply here (${carry.files.join(", ")} changed since the sweep), so they are dropped; the next sweep judges those notes again` };
+  }
+  const pr = prView(root);
+  const open = pr?.state === "OPEN" ? pr.number : undefined;
+  carry.applied = { branch: git(root, ["symbolic-ref", "--short", "-q", "HEAD"]) || "HEAD", ...(open ? { pr: open } : {}), date: today() };
+  writeCarries(f, carries);
+  return { ok: true, message: `docsic: wrote the sweep edits for ${notes} into ${carry.files.join(", ")}. Commit and push them ${open ? `to PR #${open}` : "with this branch's PR"}; the notes move to the archive once the edits reach ${carry.base}.` };
+}
+
+function gh(cwd: string, args: string[], timeoutMs?: number): { ok: boolean; out: string; err: string } {
+  const r = spawnSync("gh", args, { cwd, encoding: "utf8", timeout: timeoutMs, env: { ...process.env, GH_PROMPT_DISABLED: "1" } });
   return { ok: r.status === 0, out: r.stdout ?? "", err: ((r.stderr ?? "").trim() || r.error?.message) ?? "" };
 }
 
@@ -574,7 +773,8 @@ function prBody(c: Ctx, wt: Worktree, absorbed: { title: string; path: string; r
 function sweepLine(date: string, before: number, after: number, n: Record<Judged["result"], number>, docs: Landed): string {
   const parts = (["absorbed", "covered", "retired", "renewed"] as const).filter(k => n[k]).map(k => `${n[k]} ${k}`);
   if (n.open) parts.push(`${n.open} left open`);
-  const pr = !docs.pr ? (docs.problem ? `; no docs PR (${docs.problem})` : "")
+  const pr = docs.carried ? `; the docs edits for ${docs.carried} of them wait to ride the next PR`
+    : !docs.pr ? (docs.problem ? `; no docs PR (${docs.problem})` : "")
     : docs.merged ? `; docs PR #${docs.pr.number} merged`
     : docs.review ? `; docs PR #${docs.pr.number} awaits review, its notes stay open until a sweep finds them covered`
     : `; docs PR #${docs.pr.number} not merged, its notes stay open`;
@@ -603,7 +803,7 @@ function formatReport(r: SweepReport, work: string): string {
   ].join("\n");
 }
 
-function sweepPrompt(a: { name: string; bundle: string; out: string; count: number; wt: Worktree | null; hubFiles: HubFile[]; pinned: string[]; date: string }): string {
+function sweepPrompt(a: { name: string; bundle: string; out: string; count: number; wt: Worktree | null; hubFiles: HubFile[]; pinned: string[]; date: string; carry: boolean; busy: string[] }): string {
   const homes: string[] = [];
   if (a.wt) homes.push(
     `  - "repo:docs/<doc>.md": the existing doc that owns the code the note is about. docs/architecture.md indexes every doc, and each doc's \`owns:\` frontmatter lists the code it covers. Edit existing docs only; never create one. Never put exact commands, ports, env var names, URLs or model IDs in a doc's prose (they belong in the repo's config), so a note that is only a command is covered or stays open.`,
@@ -613,6 +813,7 @@ function sweepPrompt(a: { name: string; bundle: string; out: string; count: numb
     : h.name === "backlog.md"
       ? `  - "hub:backlog.md": an idea worth keeping. Add one line to ${h.path}, in the format already there.`
       : `  - "hub:${h.name}": what belongs in ${h.path} (read it first). Add it where it fits, in the format already there.`);
+  if (a.wt && a.busy.length) homes.push(`  - Not ${a.busy.join(", ")}: earlier sweep edits to ${a.busy.length === 1 ? "it" : "them"} wait in an open PR. A note whose home is there stays out of your decisions this time.`);
   const allowed = [...(a.wt ? ["existing files under docs/", ...AGENT_FILES] : []), ...a.hubFiles.map(h => h.path), a.out];
   return `You are the docsic note sweep for ${a.name}. Open notes are knowledge in transit to a permanent home; the ones that never get there pile up until no session reads them. Judge each note in ${a.bundle} (${a.count} notes; each starts with "### <file>") and give it exactly one outcome.
 
@@ -638,5 +839,5 @@ Write your decisions to ${a.out}, one per note you judged:
 ]}
 A later reader finds "reason" in the archive, so make it specific.
 
-Edit nothing but ${allowed.join(", ")}. Do not commit, push or open a PR: once you finish, docsic reverts edits outside those files, opens one docs PR and merges it when its checks pass, and archives each note with your reason.`;
+Edit nothing but ${allowed.join(", ")}. Do not commit, push or open a PR: once you finish, docsic reverts edits outside those files, ${a.carry ? "carries the rest into the repo's next PR" : "opens one docs PR and merges it when its checks pass"}, and archives each note with your reason.`;
 }

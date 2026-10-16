@@ -355,3 +355,27 @@ describe("note sweep", { timeout: 120_000 }, () => {
     expect(startSweep({ kind: "hub-project", slug: "alpha" }, now + SWEEP_TIMING.retryMs + 1)).toBe(true);
   });
 });
+
+describe("docsic sweep arguments", () => {
+  const run = (...a: string[]) => {
+    try { return { code: 0, out: execFileSync(TSX, [CLI, ...a], { cwd: mkdtempSync(join(tmpdir(), "docsic-args-")), encoding: "utf8", stdio: "pipe", env: { ...process.env, DOCSIC_HOME: mkdtempSync(join(tmpdir(), "docsic-home-")) } }) }; }
+    catch (e: any) { return { code: e.status as number, out: `${e.stdout}${e.stderr}` }; }
+  };
+
+  it("prints help for --help and -h instead of sweeping", () => {
+    for (const h of ["--help", "-h"]) {
+      const r = run("sweep", h);
+      expect(r.code).toBe(0);
+      expect(r.out).toContain("docsic sweep apply");
+      expect(r.out).not.toMatch(/judging|nothing to sweep|open notes/);
+    }
+  });
+
+  it("refuses an argument it does not know, and sweeps nothing", () => {
+    const r = run("sweep", "--project", "alpha", "--dryrun");
+    expect(r.code).toBe(2);
+    expect(r.out).toContain("unknown argument --dryrun; nothing swept");
+    expect(run("sweep", "stray").out).toContain("unknown argument stray");
+    for (const a of [["--project"], ["--project", "--dry-run"]]) expect(run("sweep", ...a).code).toBe(2);
+  });
+});

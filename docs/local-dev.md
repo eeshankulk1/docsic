@@ -9,13 +9,13 @@ Node 20+ and git are the only prerequisites. Commands are in [docsic.json](docsi
 
 ## Loop
 
-Install, build, test. The build emits `dist/`, which is what the `docsic` bin and every harness registration point at, so rebuild before exercising hooks or a registered server.
+Install, build, test. The build emits `dist/`, which is what the `docsic` bin and every harness registration point at, so rebuild before exercising hooks or a registered server. Packing and publishing run the build themselves (the `prepack` script), so a tarball never holds a stale `dist/`; see [deployment.md](deployment.md).
 
 ## Exercising the tools without a harness
 
 The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at another repo by running from inside it; the managed store is resolved from that repo's remote. Point the store override (named in docsic.json) at a scratch directory to keep experiments out of your real store.
 
-`sweep` runs the note sweep by hand on the repo you run it from (or a hub project by slug). Its dry run spends a real agent run but changes nothing: the docs patch, a copy of any hub file the agent wrote, and its decisions stay in the sweep's work directory under the managed root. A limit on the number of notes keeps a first look cheap.
+`sweep` runs the note sweep by hand on the repo you run it from (or a hub project by slug). Its dry run spends a real agent run but changes nothing: the docs patch, a copy of any hub file the agent wrote, and its decisions stay in the sweep's work directory under the managed root. A limit on the number of notes keeps a first look cheap. An unknown flag or stray argument exits 2 without sweeping; `docsic sweep --help` prints the help.
 
 ## Hooks
 

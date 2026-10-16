@@ -40,7 +40,12 @@ const HELP = `docsic - keeps a codebase legible to coding agents
   docsic serve               run the MCP server over stdio
 `;
 
+/** the flags `docsic sweep` takes; anything else refuses, so a mistyped flag never starts a sweep. Valued ones take the next word. */
+const SWEEP_FLAGS = ["--all", "--dry-run", "--no-merge", "--carry", "--auto", "--json"];
+const SWEEP_VALUED = ["--project", "--repo", "--limit"];
+
 async function main(): Promise<void> {
+  if (flags.has("--help") || rest.includes("-h")) { console.log(HELP); return; }
   const root = findRepoRoot();
   switch (cmd) {
     case "serve": {
@@ -113,6 +118,15 @@ async function main(): Promise<void> {
         const r = applyCarry(process.cwd());
         console.log(r.message);
         process.exitCode = r.ok ? 0 : 1;
+        return;
+      }
+      // a valued flag needs a real value: a bare `--project` or `--project --dry-run` is refused, not swept against the cwd
+      const stray = rest.filter((a, i) => SWEEP_VALUED.includes(a)
+        ? rest[i + 1] === undefined || rest[i + 1].startsWith("-")
+        : !SWEEP_FLAGS.includes(a) && !SWEEP_VALUED.includes(rest[i - 1]));
+      if (stray.length) {
+        console.error(`docsic sweep: unknown argument ${stray.join(" ")}; nothing swept. See docsic --help.`);
+        process.exitCode = 2;
         return;
       }
       const project = opt("--project"), repo = opt("--repo");

@@ -4,6 +4,7 @@
     { "name": "docsic", "dir": ".", "runner": "vitest", "testCommand": "npx vitest run", "buildCommand": "npm run build" }
   ],
   "lifecycle": { "startAll": "npm run build && node dist/cli.js serve" },
+  "release": { "publish": "npm publish --access public", "verify": "npm pack @eeshkulk/docsic@<version>" },
   "env": { "docsic": { "file": null, "required": [], "optional": ["DOCSIC_HOME"] } },
   "notes": "Tests set DOCSIC_HOME per test; never run the suite with DOCSIC_HOME pointing at your real ~/.docsic."
 }

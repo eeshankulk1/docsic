@@ -269,6 +269,29 @@ describe("hooks", () => {
         expect(started(w, "sup-a")).toBe(false);
       });
 
+      it("a supervisor rollcall has already ended still captures nothing", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [{ repo: "alpha", state: "working" }] });
+        hook(w.repos, "session-start", "sup-b");
+        hook(w.repos, "prompt-submit", "sup-b", { prompt: "how is alpha?" });
+        process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: null, tasks: [] }); // rollcall's session-end hook ran first
+        end(w, "sup-b", longLog(w));
+        expect(started(w, "sup-b")).toBe(false);
+      });
+
+      it("a supervisor resumed after rollcall ended it keeps its flag", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [{ repo: "alpha", state: "working" }] });
+        hook(w.repos, "session-start", "sup-c");
+        hook(w.repos, "prompt-submit", "sup-c", { prompt: "how is alpha?" });
+        process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: null, tasks: [] });
+        hook(w.repos, "session-start", "sup-c"); // resume
+        end(w, "sup-c", longLog(w));
+        expect(started(w, "sup-c")).toBe(false);
+      });
+
       it("a plain session captures at its end, and again only once it has grown", () => {
         fakes();
         const w = world({ distill: "auto" });

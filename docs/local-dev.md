@@ -1,5 +1,5 @@
 ---
-owns: [package.json, tsconfig.json, test/**]
+owns: [package.json, tsconfig.json, vitest.config.ts, test/**]
 status: current
 ---
 
@@ -25,4 +25,5 @@ The CLI mirrors each tool: `load`, `check`, `recall`, `init`. Point them at anot
 
 - Tests create real git repos in the OS temp dir and redirect the managed store per test; they never touch your real store.
 - The sweep tests put stand-ins for the agent CLI and `gh` first on PATH, and a bare repo stands in for origin; nothing reaches a model or GitHub.
+- `vitest.config.ts` sets a 30 s test timeout and loads `test/setup.ts`, which gives the event loop a turn after each test. Tests block on git and tsx subprocesses; without that turn a loaded worker can stall long enough for vitest to fail the run on its own message timeout.
 - `doc-staleness` compares commit timestamps, so an uncommitted doc edit does not clear the warning until committed.

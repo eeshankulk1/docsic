@@ -25,7 +25,7 @@ import { findRepoRoot, git, managedRoot } from "./core/repo.js";
  */
 interface Payload { cwd?: string; session_id?: string; prompt?: string; transcript_path?: string; stop_hook_active?: boolean }
 
-interface Marker { head: string; files: Record<string, number>; injected: string[] }
+interface Marker { head: string; files: Record<string, number>; injected: string[]; supervisor?: boolean }
 
 function sessionFile(name: string): string {
   const dir = join(managedRoot(), "sessions");
@@ -104,6 +104,7 @@ function sessionStart(root: string, session: string, initialized: boolean, hub: 
     head: initialized ? git(root, ["rev-parse", "HEAD"]) : "",
     files: hub ? snapshot(hub) : {},
     injected: project ? [project.slug] : [],
+    supervisor: readMarker(session)?.supervisor, // a resumed session keeps what a live prompt learned
   };
   writeFileSync(markerPath(session), JSON.stringify(marker));
   const text = fitPayload(out);
@@ -146,7 +147,7 @@ function promptSubmit(cwd: string, session: string, prompt: string, hub: Hub | n
     { text: "[docsic] project memory changed since this session last read it (another session or worktree):" },
     ...delta.map(x => ({ text: `--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").trim()}`, more: x })),
   ]);
-  writeFileSync(markerPath(session), JSON.stringify({ ...m, files: current }));
+  writeFileSync(markerPath(session), JSON.stringify({ ...m, files: current, supervisor: m.supervisor || !!tasked }));
   const text = fitGroups(groups);
   if (text) console.log(text);
 }
@@ -176,7 +177,8 @@ function changedSince(root: string, base: string): Set<string> {
 }
 
 const MIN_TRANSCRIPT_BYTES = 30_000; // trivial sessions have nothing worth distilling
-const LOCK_FRESH_MS = 10 * 60 * 1000;
+const DISTILL_TIMEOUT_MS = 15 * 60 * 1000;
+const LOCK_FRESH_MS = DISTILL_TIMEOUT_MS + 5 * 60 * 1000; // longer than a run, so a lock never goes stale under a live distiller
 
 /**
  * Hands off to a detached `docsic distill` so the session exits immediately,
@@ -200,7 +202,9 @@ function sessionEnd(cwd: string, root: string, session: string, initialized: boo
  * many sessions it took (park, resume, handoff), so its capture waits for the
  * session that ends after the task finished, and reads the task's report, PR
  * and every transcript. A supervisor only routes tasks, so it has nothing of
- * its own to capture. Any other session is its own unit.
+ * its own to capture. Any other session is its own unit. rollcall may have
+ * ended this session already (its hook runs beside this one) and then no longer
+ * names it a supervisor, so what a live prompt learned counts first.
  */
 function capture(job: DistillJob, root: string, hub: Hub | null): void {
   const { session, cwd } = job;
@@ -209,16 +213,16 @@ function capture(job: DistillJob, root: string, hub: Hub | null): void {
     if (isFinished(task)) distillTask({ ...job, task }, root);
     return;
   }
-  if (hub && supervisorProjects(session, cwd, hub)) return;
+  if (hub && (readMarker(session)?.supervisor || supervisorProjects(session, cwd, hub))) return;
   distillSession(job, root);
 }
 
 function distillTask(job: DistillJob & { task: Task }, root: string): void {
   const { task } = job;
-  const once = sessionFile(`distill-task-${task.home}-${task.id}`);
-  if (existsSync(once) && readFileSync(once, "utf8") === String(task.stateAt)) return;
-  writeFileSync(once, String(task.stateAt));
-  startDistiller(job, root);
+  // One file per finish, created exclusively: of several sessions that end together, one wins.
+  const once = sessionFile(`distill-task-${task.home}-${task.id}-${task.stateAt}`);
+  try { writeFileSync(once, "", { flag: "wx" }); } catch { return; }
+  try { startDistiller(job, root); } catch (e) { rmSync(once, { force: true }); throw e; } // a finish whose distiller never started stays capturable
 }
 
 /** A resumed session is distilled again only once it has grown by what a new session would need. */
@@ -242,21 +246,31 @@ function lockFor(target: DistillTarget, root: string): string {
 }
 
 function startDistiller(job: DistillJob, root: string): void {
-  const log = openSync(sessionFile(`distill-${job.session.slice(0, 8)}.log`), "w");
-  spawn(process.execPath, [process.argv[1], "distill", JSON.stringify({ ...job, lock: lockFor(job.target, root) })], {
-    detached: true, stdio: ["ignore", log, log], env: { ...process.env, DOCSIC_DISTILLER: "1" },
-  }).unref();
+  const lock = lockFor(job.target, root);
+  try {
+    const log = openSync(sessionFile(`distill-${job.session.slice(0, 8)}.log`), "w");
+    spawn(process.execPath, [process.argv[1], "distill", JSON.stringify({ ...job, lock })], {
+      detached: true, stdio: ["ignore", log, log], env: { ...process.env, DOCSIC_DISTILLER: "1" },
+    }).unref();
+  } catch (e) { releaseLock(lock, job.session); throw e; } // a lock written for a distiller that never started
 }
 
 /** A finished task is captured only once, so it waits its turn where a plain session would skip. */
 function waitForLock(lock: string, session: string): void {
   for (;;) {
-    try { writeFileSync(lock, session, { flag: "wx" }); return; } catch { /* held */ }
+    try { writeFileSync(lock, session, { flag: "wx" }); return; } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "EEXIST") return; // no lock to wait on: run without
+    }
     try {
       if (Date.now() - statSync(lock).mtimeMs >= LOCK_FRESH_MS) rmSync(lock, { force: true });
-      else spawnSync("sleep", ["5"]);
+      else Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5_000);
     } catch { /* released between the two calls */ }
   }
+}
+
+/** Removes the lock only if this session still holds it: a run that outlived its lock must not free the next holder's. */
+function releaseLock(lock: string | undefined, session: string): void {
+  try { if (lock && readFileSync(lock, "utf8") === session) rmSync(lock, { force: true }); } catch { /* already gone */ }
 }
 
 export type DistillTarget = { kind: "repo"; root: string } | { kind: "hub-project"; slug: string } | { kind: "workspace" };
@@ -269,7 +283,11 @@ export interface DistillJob { target: DistillTarget; transcript?: string; sessio
  * syncs the hub.
  */
 export function distill(arg: string): void {
-  const { target, transcript, session, task, lock } = JSON.parse(arg) as DistillJob & { lock: string };
+  const job = JSON.parse(arg) as DistillJob & { lock?: string };
+  try { distillRun(job); } finally { releaseLock(job.lock, job.session); }
+}
+
+function distillRun({ target, transcript, session, task, lock }: DistillJob & { lock?: string }): void {
   const hub = loadHub();
   let dir: string;
   let scopeText: string;
@@ -286,10 +304,9 @@ export function distill(arg: string): void {
       hub.projects.map(p => `- ${p.slug} (aliases: ${p.match.join(", ")})`).join("\n") +
       "\nDetermine from the transcript which of these (if any) the session worked on.";
   }
-  if (task) waitForLock(lock, session);
-  const ran = runAgent({ prompt: distillPrompt(transcript ?? "", session, scopeText, task), cwd: dir, timeoutMs: 15 * 60 * 1000, lean: true,
+  if (task && lock) waitForLock(lock, session);
+  const ran = runAgent({ prompt: distillPrompt(transcript ?? "", session, scopeText, task), cwd: dir, timeoutMs: DISTILL_TIMEOUT_MS, lean: true,
     tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash(jq:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(grep:*)", "Bash(wc:*)"] });
-  rmSync(lock, { force: true });
   if (!ran) return;
   if (hub && target.kind !== "repo") syncHub(hub, target.kind === "hub-project" ? target.slug : "workspace", task ? `${task.state} ${task.title}` : "distilled session");
   if (hub && target.kind === "repo") { const h = memoryHome(target.root); if (h.hub && h.slug) syncHub(h.hub, h.slug, task ? `${task.state} ${task.title}` : "distilled session"); }

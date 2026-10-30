@@ -336,6 +336,8 @@ export function distillPrompt(transcript: string, session: string, scopeText: st
 
 ${scopeText}
 
+Bash here runs only jq, tail, head, grep and wc: call each directly with absolute paths, with no cd and no shell variables.
+
 For each project this work materially advanced:
 
 1. REWRITE its state.md (create if missing): where things stand NOW, at most ${STATE_BUDGET} tokens (~40 lines). Read the old one first and keep its plain style. Format:

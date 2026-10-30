@@ -1,5 +1,5 @@
-import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, openSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { runAgent } from "./core/agent.js";
 import { runMechanicalChecks } from "./core/check.js";
@@ -8,6 +8,7 @@ import { loadHub, projectDir, readUserConfig, renderProject, resolveScope, snaps
 import { load } from "./core/load.js";
 import { fitGroups, fitPayload, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin, type Block } from "./core/budget.js";
 import { memoryHome, STATE_BUDGET } from "./core/memory.js";
+import { isFinished, supervisorProjects, workerTask, type Task } from "./core/rollcall.js";
 import { carryNudge, pickSweep, startSweep, sweepTargetFor } from "./core/sweep.js";
 import { findRepoRoot, git, managedRoot } from "./core/repo.js";
 
@@ -19,18 +20,20 @@ import { findRepoRoot, git, managedRoot } from "./core/repo.js";
  * Two independent triggers:
  * - the repo ran `docsic init` (docs/docsic.json exists): docs payload, Stop gate
  * - a hub is configured and the cwd maps to a hub project or the workspace: memory injection
- * The Stop hook also asks a session whose branch has an open PR to carry
- * waiting note sweep edits into it, in either case.
+ * The Stop hook also asks a session whose branch has work and no PR yet to take
+ * waiting note sweep edits along, in either case.
  */
 interface Payload { cwd?: string; session_id?: string; prompt?: string; transcript_path?: string; stop_hook_active?: boolean }
 
 interface Marker { head: string; files: Record<string, number>; injected: string[] }
 
-function markerPath(session: string): string {
+function sessionFile(name: string): string {
   const dir = join(managedRoot(), "sessions");
   mkdirSync(dir, { recursive: true });
-  return join(dir, `${session}.json`);
+  return join(dir, name);
 }
+
+const markerPath = (session: string) => sessionFile(`${session}.json`);
 
 function readMarker(session: string): Marker | null {
   try { return JSON.parse(readFileSync(markerPath(session), "utf8")); } catch { return null; }
@@ -51,7 +54,7 @@ export async function hook(event: string, fallbackRoot: string): Promise<void> {
   if (!initialized && !scope) return;
 
   if (event === "session-start") return sessionStart(root, session, initialized, hub, scope);
-  if (event === "prompt-submit") return promptSubmit(session, p.prompt ?? "", hub);
+  if (event === "prompt-submit") return promptSubmit(cwd, session, p.prompt ?? "", hub);
   if (event === "stop") return stop(cwd, root, session, initialized, p);
   if (event === "session-end") return sessionEnd(cwd, root, session, initialized, hub, scope, p.transcript_path);
 }
@@ -115,39 +118,44 @@ function openNotesBlock(root: string, notes: ReturnType<typeof load>["notes"]): 
   return `## Open notes\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`;
 }
 
-/** First mention of a hub project injects its memory; writes by parallel sessions are injected as a delta. All of it shares one hook's limit. */
-function promptSubmit(session: string, prompt: string, hub: Hub | null): void {
+/**
+ * First mention of a hub project injects its memory; writes by parallel
+ * sessions are injected as a delta. All of it shares one hook's limit. A
+ * supervisor reads no repo, so it gets only the projects it has an open task in.
+ */
+function promptSubmit(cwd: string, session: string, prompt: string, hub: Hub | null): void {
   if (!hub) return;
   const m = readMarker(session) ?? { head: "", files: {}, injected: [] };
   const current = snapshot(hub);
+  const mentioned = hub.projects.filter(p => !m.injected.includes(p.slug) && !hub.skipPromptMatch.includes(p.slug)
+    && p.match.some(t => new RegExp(`\\b${esc(t)}\\b`, "i").test(prompt)));
+  const changed = Object.keys(m.files).length ? Object.keys(current).filter(x => current[x] !== m.files[x]) : [];
+  const tasked = mentioned.length || changed.length ? supervisorProjects(session, cwd, hub) : null;
   const groups: Block[][] = [];
   const shown = new Set<string>();
-  for (const p of hub.projects) {
-    if (m.injected.includes(p.slug) || hub.skipPromptMatch.includes(p.slug)) continue;
-    if (!p.match.some(t => new RegExp(`\\b${esc(t)}\\b`, "i").test(prompt))) continue;
+  for (const p of mentioned) {
+    if (tasked && !tasked.has(p.slug)) continue;
     const r = renderProject(hub, p);
     if (!r.blocks.length) continue;
     m.injected.push(p.slug);
     groups.push([{ text: `[docsic] memory for **${p.slug}** (first mention this session):` }, ...r.blocks]);
     r.paths.forEach(x => shown.add(x));
   }
-  if (Object.keys(m.files).length) {
-    const delta = Object.keys(current).filter(x => current[x] !== m.files[x] && !shown.has(x));
-    if (delta.length) groups.push([
-      { text: "[docsic] project memory changed since this session last read it (another session or worktree):" },
-      ...delta.map(x => ({ text: `--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").trim()}`, more: x })),
-    ]);
-  }
+  const delta = changed.filter(x => !shown.has(x) && (!tasked || [...tasked].some(slug => x.startsWith(`${projectDir(hub, slug)}/`))));
+  if (delta.length) groups.push([
+    { text: "[docsic] project memory changed since this session last read it (another session or worktree):" },
+    ...delta.map(x => ({ text: `--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").trim()}`, more: x })),
+  ]);
   writeFileSync(markerPath(session), JSON.stringify({ ...m, files: current }));
   const text = fitGroups(groups);
   if (text) console.log(text);
 }
 
-/** Blocks once per session for each of: check errors in files the session touched, sweep edits that can ride this branch's open PR. */
+/** Blocks once per session for each of: check errors in files the session touched, sweep edits that can ride this branch's coming PR. */
 function stop(cwd: string, root: string, session: string, initialized: boolean, p: Payload): void {
   if (p.stop_hook_active) return; // never loop
   const reasons: string[] = [];
-  const asked = (name: string) => join(dirname(markerPath(session)), `${name}-${session}`);
+  const asked = (name: string) => sessionFile(`${name}-${session}`);
   const ask = (name: string, reason: string) => { writeFileSync(asked(name), ""); reasons.push(reason); };
   if (initialized && !existsSync(asked("gate"))) {
     // Gate only on files this session touched: pre-existing debt is surfaced at
@@ -180,34 +188,88 @@ function sessionEnd(cwd: string, root: string, session: string, initialized: boo
     : scope?.kind === "workspace" && !initialized ? { kind: "workspace" }
     : { kind: "repo", root };
   const cfg = readUserConfig();
-  if (cfg.distill === "auto") distillAfter(cwd, root, session, target, transcript);
+  if (cfg.distill === "auto") capture({ target, transcript, session, cwd }, root, hub);
   if (cfg.sweep === "auto" || cfg.sweep === "pr" || cfg.sweep === "carry") {
     const sweep = target.kind === "workspace" ? (hub ? pickSweep(hub) : null) : sweepTargetFor(cwd);
     if (sweep) startSweep(sweep, Date.now(), { noMerge: cfg.sweep === "pr", carry: cfg.sweep === "carry" });
   }
 }
 
-function distillAfter(cwd: string, root: string, session: string, target: DistillTarget, transcript?: string): void {
-  if (!transcript || !existsSync(transcript) || statSync(transcript).size < MIN_TRANSCRIPT_BYTES) return;
-  const key = target.kind === "hub-project" ? target.slug : target.kind === "workspace" ? "workspace" : basename(root);
-  const lock = join(managedRoot(), "sessions", `distill-${key}.lock`);
+/**
+ * Memory is captured once per unit of work. A worker's task is one unit, however
+ * many sessions it took (park, resume, handoff), so its capture waits for the
+ * session that ends after the task finished, and reads the task's report, PR
+ * and every transcript. A supervisor only routes tasks, so it has nothing of
+ * its own to capture. Any other session is its own unit.
+ */
+function capture(job: DistillJob, root: string, hub: Hub | null): void {
+  const { session, cwd } = job;
+  const task = workerTask(session, cwd);
+  if (task) {
+    if (isFinished(task)) distillTask({ ...job, task }, root);
+    return;
+  }
+  if (hub && supervisorProjects(session, cwd, hub)) return;
+  distillSession(job, root);
+}
+
+function distillTask(job: DistillJob & { task: Task }, root: string): void {
+  const { task } = job;
+  const once = sessionFile(`distill-task-${task.home}-${task.id}`);
+  if (existsSync(once) && readFileSync(once, "utf8") === String(task.stateAt)) return;
+  writeFileSync(once, String(task.stateAt));
+  startDistiller(job, root);
+}
+
+/** A resumed session is distilled again only once it has grown by what a new session would need. */
+function distillSession(job: DistillJob, root: string): void {
+  const { transcript, session } = job;
+  if (!transcript || !existsSync(transcript)) return;
+  const size = statSync(transcript).size;
+  const seen = sessionFile(`distilled-${session}`);
+  const before = existsSync(seen) ? Number(readFileSync(seen, "utf8")) : 0;
+  if (size - before < MIN_TRANSCRIPT_BYTES) return;
+  const lock = lockFor(job.target, root);
   if (existsSync(lock) && Date.now() - statSync(lock).mtimeMs < LOCK_FRESH_MS) return;
   writeFileSync(lock, session);
-  const log = openSync(join(managedRoot(), "sessions", `distill-${session.slice(0, 8)}.log`), "w");
-  spawn(process.execPath, [process.argv[1], "distill", JSON.stringify({ target, transcript, session, cwd })], {
+  writeFileSync(seen, String(size));
+  startDistiller(job, root);
+}
+
+function lockFor(target: DistillTarget, root: string): string {
+  const key = target.kind === "hub-project" ? target.slug : target.kind === "workspace" ? "workspace" : basename(root);
+  return sessionFile(`distill-${key}.lock`);
+}
+
+function startDistiller(job: DistillJob, root: string): void {
+  const log = openSync(sessionFile(`distill-${job.session.slice(0, 8)}.log`), "w");
+  spawn(process.execPath, [process.argv[1], "distill", JSON.stringify({ ...job, lock: lockFor(job.target, root) })], {
     detached: true, stdio: ["ignore", log, log], env: { ...process.env, DOCSIC_DISTILLER: "1" },
   }).unref();
 }
 
+/** A finished task is captured only once, so it waits its turn where a plain session would skip. */
+function waitForLock(lock: string, session: string): void {
+  for (;;) {
+    try { writeFileSync(lock, session, { flag: "wx" }); return; } catch { /* held */ }
+    try {
+      if (Date.now() - statSync(lock).mtimeMs >= LOCK_FRESH_MS) rmSync(lock, { force: true });
+      else spawnSync("sleep", ["5"]);
+    } catch { /* released between the two calls */ }
+  }
+}
+
 export type DistillTarget = { kind: "repo"; root: string } | { kind: "hub-project"; slug: string } | { kind: "workspace" };
+export interface DistillJob { target: DistillTarget; transcript?: string; session: string; cwd: string; task?: Task }
 
 /**
- * The distiller: a headless agent reads the transcript and rewrites state /
- * files notes. Runs synchronously inside the detached `docsic distill` process,
- * scoped to the memory directory (its cwd), then syncs the hub.
+ * The distiller: a headless agent reads what the session or task left behind
+ * and rewrites state / files notes. Runs synchronously inside the detached
+ * `docsic distill` process, scoped to the memory directory (its cwd), then
+ * syncs the hub.
  */
 export function distill(arg: string): void {
-  const { target, transcript, session } = JSON.parse(arg) as { target: DistillTarget; transcript: string; session: string };
+  const { target, transcript, session, task, lock } = JSON.parse(arg) as DistillJob & { lock: string };
   const hub = loadHub();
   let dir: string;
   let scopeText: string;
@@ -217,39 +279,73 @@ export function distill(arg: string): void {
   } else if (!hub) return;
   else if (target.kind === "hub-project") {
     dir = hub.root;
-    scopeText = `This session ran in the ${target.slug} project. Its memory lives in ${projectDir(hub, target.slug)}/ (state.md, notes/).`;
+    scopeText = `This work ran in the ${target.slug} project. Its memory lives in ${projectDir(hub, target.slug)}/ (state.md, notes/).`;
   } else {
     dir = hub.root;
     scopeText = `This session ran from the workspace, not a single project. Projects (memory in ${hub.root}/projects/<slug>/):\n` +
       hub.projects.map(p => `- ${p.slug} (aliases: ${p.match.join(", ")})`).join("\n") +
       "\nDetermine from the transcript which of these (if any) the session worked on.";
   }
-  const ran = runAgent({ prompt: distillPrompt(transcript, session, scopeText), cwd: dir, timeoutMs: 15 * 60 * 1000,
+  if (task) waitForLock(lock, session);
+  const ran = runAgent({ prompt: distillPrompt(transcript ?? "", session, scopeText, task), cwd: dir, timeoutMs: 15 * 60 * 1000, lean: true,
     tools: ["Read", "Grep", "Glob", "Write", "Edit", "Bash(jq:*)", "Bash(tail:*)", "Bash(head:*)", "Bash(grep:*)", "Bash(wc:*)"] });
+  rmSync(lock, { force: true });
   if (!ran) return;
-  if (hub && target.kind !== "repo") syncHub(hub, target.kind === "hub-project" ? target.slug : "workspace", "distilled session");
-  if (hub && target.kind === "repo") { const h = memoryHome(target.root); if (h.hub && h.slug) syncHub(h.hub, h.slug, "distilled session"); }
+  if (hub && target.kind !== "repo") syncHub(hub, target.kind === "hub-project" ? target.slug : "workspace", task ? `${task.state} ${task.title}` : "distilled session");
+  if (hub && target.kind === "repo") { const h = memoryHome(target.root); if (h.hub && h.slug) syncHub(h.hub, h.slug, task ? `${task.state} ${task.title}` : "distilled session"); }
 }
 
-function distillPrompt(transcript: string, session: string, scopeText: string): string {
-  const today = new Date().toISOString().slice(0, 10);
+/** Oldest first; a handoff or resume stays in the same worktree, so every session's transcript sits beside the last one. */
+function taskTranscripts(task: Task, last: string): string[] {
+  if (!last) return [];
+  const all = task.sessions.map(s => join(dirname(last), `${s.id}.jsonl`)).filter(existsSync);
+  return all.includes(last) ? all : [...all, last];
+}
+
+function prDescription(url: string | null): string {
+  if (!url) return "";
+  const r = spawnSync("gh", ["pr", "view", url, "--json", "title,body", "--jq", `.title + "\n\n" + .body`], { encoding: "utf8", timeout: 30_000 });
+  return r.status === 0 ? r.stdout.trim() : "";
+}
+
+function taskSource(task: Task, last: string): string {
+  const pr = prDescription(task.pr);
+  return `You are the docsic distiller. A task just finished (${task.state}): ${task.title}${task.pr ? `\nPR: ${task.pr}` : ""}
+
+The report its agent wrote at the end:
+<report>
+${task.output?.text.trim() ?? "(none)"}
+</report>
+${pr ? `\nThe PR description:\n<pr>\n${pr}\n</pr>\n` : ""}
+Its session transcripts (JSONL), oldest first:
+${taskTranscripts(task, last).join("\n")}
+
+Start from the report and the PR: they say what shipped. Then take from the transcripts what they leave out: the owner's decisions and the gotchas the agent hit (the transcripts may be large; do not read them whole - grep for user messages, decisions, errors, and sample the last ~200 lines of each). Other tasks run at the same time: keep what the old state.md says about them.`;
+}
+
+function sessionSource(transcript: string): string {
   return `You are the docsic distiller. A coding-agent session just ended; its transcript (JSONL) is at:
 ${transcript}
 
+Extract the human-relevant story: pull user messages and key assistant conclusions with grep/jq/tail (the transcript may be large; do not read it whole - sample the start, focus on the last ~200 lines, grep for decisions, builds, PRs). If the session did no meaningful work, do NOTHING and stop.`;
+}
+
+export function distillPrompt(transcript: string, session: string, scopeText: string, task?: Task): string {
+  const today = new Date().toISOString().slice(0, 10);
+  return `${task ? taskSource(task, transcript) : sessionSource(transcript)}
+
 ${scopeText}
 
-Extract the human-relevant story: pull user messages and key assistant conclusions with grep/jq/tail (the transcript may be large; do not read it whole - sample the start, focus on the last ~200 lines, grep for decisions, builds, PRs). If the session did no meaningful work, do NOTHING and stop.
+For each project this work materially advanced:
 
-Otherwise, for each project the session materially advanced:
-
-1. REWRITE its state.md (create if missing): where things stand NOW, at most ${STATE_BUDGET} tokens (~40 lines). Format:
+1. REWRITE its state.md (create if missing): where things stand NOW, at most ${STATE_BUDGET} tokens (~40 lines). Read the old one first and keep its plain style. Format:
    _updated: ${today} (session ${session.slice(0, 8)})_
    ## Now       <- 1-3 bullets: current milestone, live versions, what just happened
    ## In flight <- pending reviews, unmerged PRs, items awaiting the user
    ## Next      <- 1-3 bullets: the agreed next steps
    Carry forward still-true facts from the old state.md; drop resolved ones. State replaces; it is not a log.
 
-2. Only if the session produced durable discoveries, gotchas or decisions another agent would need weeks later, write AT MOST 2 notes to its notes/${today}-<kebab-title>.md:
+2. Only if the work produced durable discoveries, gotchas or decisions another agent would need weeks later, write AT MOST 2 notes to its notes/${today}-<kebab-title>.md:
    ---
    title: <short title>
    type: discovery | gotcha | decision | idea

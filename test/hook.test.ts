@@ -1,9 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { findAgent } from "../src/core/agent.js";
 import { configPath } from "../src/core/config.js";
+import { distillPrompt } from "../src/hooks.js";
+import type { Task } from "../src/core/rollcall.js";
 import { commit, tmpRepo, write } from "./helpers.js";
 
 const CLI = join(__dirname, "..", "src", "cli.ts");
@@ -158,6 +161,164 @@ describe("hooks", () => {
       expect(out.length).toBeLessThanOrEqual(LINE);
       expect(out).toContain("**alpha**");
       expect(out).toContain("docsic recall --hub");
+    });
+  });
+
+  describe("with rollcall", () => {
+    const saved = { PATH: process.env.PATH, ROLLCALL_TASK: process.env.ROLLCALL_TASK };
+    afterEach(() => {
+      process.env.PATH = saved.PATH;
+      for (const k of ["ROLLCALL_TASK", "FAKE_ROLLCALL_STATUS", "FAKE_ROLLCALL_TASK"]) delete process.env[k];
+      if (saved.ROLLCALL_TASK) process.env.ROLLCALL_TASK = saved.ROLLCALL_TASK;
+    });
+
+    /** Stand-ins first on PATH: rollcall answers from the environment, and any agent CLI does nothing. */
+    function fakes(): void {
+      const bin = mkdtempSync(join(tmpdir(), "docsic-bin-"));
+      const script = (name: string, body: string) => { writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`); chmodSync(join(bin, name), 0o755); };
+      script("rollcall", `case "$1" in status) v="$FAKE_ROLLCALL_STATUS" ;; task) v="$FAKE_ROLLCALL_TASK" ;; esac\n[ -n "$v" ] || exit 1\necho "$v"`);
+      script("claude", "exit 0");
+      process.env.PATH = `${bin}:${process.env.PATH}`;
+      delete process.env.ROLLCALL_TASK;
+    }
+
+    function world(cfg: object = {}): { repos: string; hubRoot: string; home: string; alpha: string } {
+      tmpRepo(); // a fresh DOCSIC_HOME: the distiller's lock is per project
+      const repos = realpathSync(mkdtempSync(join(tmpdir(), "docsic-repos-")));
+      const hubRoot = join(repos, "brain");
+      for (const slug of ["alpha", "beta"]) write(hubRoot, `projects/${slug}/state.md`, `## Now\n- ${slug} here\n## In flight\n## Next\n`);
+      const alpha = join(repos, "alpha");
+      mkdirSync(alpha, { recursive: true });
+      const home = process.env.DOCSIC_HOME!;
+      writeFileSync(join(home, "config.json"), JSON.stringify({ hub: { root: hubRoot, reposRoot: repos, sync: "none" }, ...cfg }));
+      return { repos, hubRoot, home, alpha };
+    }
+
+    const task = (state: string, stateAt = 1): string => JSON.stringify({ home: "falcon", id: "t1", title: "a task", state, stateAt, pr: null, output: { text: "what shipped" }, sessions: [{ id: "w1" }] });
+
+    it("a supervisor gets memory only for projects with an open task, by first mention or by delta", () => {
+      fakes();
+      const w = world();
+      process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [{ repo: "alpha", state: "working" }, { repo: "beta", state: "landed" }] });
+      hook(w.repos, "session-start", "sup");
+      const first = hook(w.repos, "prompt-submit", "sup", { prompt: "how are alpha and beta?" });
+      expect(first).toContain("memory for **alpha**");
+      expect(first).not.toContain("memory for **beta**");
+
+      write(w.hubRoot, "projects/alpha/state.md", "## Now\n- alpha moved\n## In flight\n## Next\n");
+      write(w.hubRoot, "projects/beta/state.md", "## Now\n- beta moved\n## In flight\n## Next\n");
+      const delta = hook(w.repos, "prompt-submit", "sup", { prompt: "anything new?" });
+      expect(delta).toContain("alpha moved");
+      expect(delta).not.toContain("beta moved");
+
+      // Once a task opens there, its project is injected at the next mention.
+      process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [{ repo: "beta", state: "working" }] });
+      expect(hook(w.repos, "prompt-submit", "sup", { prompt: "and beta?" })).toContain("memory for **beta**");
+    });
+
+    it("any other session is untouched by rollcall", () => {
+      fakes();
+      const w = world();
+      process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: null }, tasks: [] });
+      hook(w.repos, "session-start", "plain");
+      expect(hook(w.repos, "prompt-submit", "plain", { prompt: "alpha and beta" })).toContain("memory for **beta**");
+    });
+
+    describe("capture", () => {
+      const end = (w: { alpha: string }, session: string, transcript: string) => hook(w.alpha, "session-end", session, { transcript_path: transcript });
+      const started = (w: { home: string }, session: string) => existsSync(join(w.home, "sessions", `distill-${session.slice(0, 8)}.log`));
+      const longLog = (w: { repos: string }, name = "t.jsonl") => { const f = join(w.repos, name); writeFileSync(f, "x".repeat(40_000)); return f; };
+
+      it("a worker waits for its task to finish, then captures it once", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.ROLLCALL_TASK = "falcon:t1";
+        const log = longLog(w);
+
+        process.env.FAKE_ROLLCALL_TASK = task("working");
+        end(w, "worker-a", log); // a park or a handoff
+        expect(started(w, "worker-a")).toBe(false);
+
+        process.env.FAKE_ROLLCALL_TASK = task("landed");
+        end(w, "worker-b", log);
+        expect(started(w, "worker-b")).toBe(true);
+        end(w, "worker-c", log); // the same finish, seen by a resumed session
+        expect(started(w, "worker-c")).toBe(false);
+
+        process.env.FAKE_ROLLCALL_TASK = task("landed", 2); // reopened and landed again
+        end(w, "worker-d", log);
+        expect(started(w, "worker-d")).toBe(true);
+      });
+
+      it("a finished task is captured however short its last session", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.ROLLCALL_TASK = "falcon:t1";
+        process.env.FAKE_ROLLCALL_TASK = task("closed");
+        const short = join(w.repos, "short.jsonl");
+        writeFileSync(short, "x");
+        end(w, "worker-e", short);
+        expect(started(w, "worker-e")).toBe(true);
+      });
+
+      it("a supervisor captures nothing", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [] });
+        end(w, "sup-a", longLog(w));
+        expect(started(w, "sup-a")).toBe(false);
+      });
+
+      it("a plain session captures at its end, and again only once it has grown", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        const log = longLog(w);
+        end(w, "plain-a", log);
+        expect(started(w, "plain-a")).toBe(true);
+        rmSync(join(w.home, "sessions", "distill-plain-a.log"));
+        rmSync(join(w.home, "sessions", "distill-alpha.lock"));
+
+        appendFileSync(log, "y".repeat(5_000)); // resumed for a moment
+        end(w, "plain-a", log);
+        expect(started(w, "plain-a")).toBe(false);
+
+        appendFileSync(log, "y".repeat(30_000));
+        end(w, "plain-a", log);
+        expect(started(w, "plain-a")).toBe(true);
+      });
+
+      it("falls back to the plain session when rollcall cannot answer", () => {
+        fakes();
+        const w = world({ distill: "auto" });
+        process.env.ROLLCALL_TASK = "falcon:t1"; // no FAKE_ROLLCALL_TASK: the command fails
+        end(w, "orphan-a", longLog(w));
+        expect(started(w, "orphan-a")).toBe(true);
+      });
+
+      it("the task prompt carries the report and every transcript, oldest first", () => {
+        fakes();
+        const dir = mkdtempSync(join(tmpdir(), "docsic-t-"));
+        for (const s of ["w1", "w2"]) writeFileSync(join(dir, `${s}.jsonl`), "");
+        const t: Task = { home: "falcon", id: "t1", title: "a task", state: "landed", stateAt: 1, pr: null, output: { text: "what shipped" }, sessions: [{ id: "w1" }, { id: "gone" }, { id: "w2" }] };
+        const prompt = distillPrompt(join(dir, "w2.jsonl"), "abcdefgh", "scope text", t);
+        expect(prompt).toContain("A task just finished (landed): a task");
+        expect(prompt).toContain("<report>\nwhat shipped\n</report>");
+        expect(prompt).toContain(`${join(dir, "w1.jsonl")}\n${join(dir, "w2.jsonl")}`);
+        expect(prompt).not.toContain("gone.jsonl");
+        expect(prompt).toContain("REWRITE its state.md");
+        expect(distillPrompt("/t.jsonl", "abcdefgh", "scope")).toContain("A coding-agent session just ended");
+      });
+
+      it("the distiller launches lean, the sweep with the user's full setup", () => {
+        fakes();
+        const run = { prompt: "p", cwd: "/", tools: ["Read", "Bash(jq:*)", "Bash(tail:*)"], timeoutMs: 1 };
+        const lean = findAgent({ ...run, lean: true })!.args;
+        expect(lean).toEqual(expect.arrayContaining(["--strict-mcp-config", "--disable-slash-commands", "--no-session-persistence"]));
+        expect(lean[lean.indexOf("--setting-sources") + 1]).toBe("");
+        expect(lean.slice(lean.indexOf("--tools"), lean.indexOf("--allowedTools"))).toEqual(["--tools", "Read", "Bash"]);
+        expect(lean).not.toContain("--bare"); // it refuses subscription logins
+        expect(findAgent(run)!.args).not.toContain("--setting-sources");
+      });
     });
   });
 

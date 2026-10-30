@@ -33,6 +33,7 @@ case "$1 $2" in
   "pr checks") echo "[{\\"name\\":\\"Docs gate\\",\\"bucket\\":\\"\${FAKE_GH_CHECKS:-pass}\\"}]" ;;
   "pr merge") git push -q origin HEAD:main ;;
   "pr view") [ -n "$FAKE_GH_VIEW" ] && echo "$FAKE_GH_VIEW" || exit 1 ;;
+  "pr list") [ -n "$FAKE_GH_LIST_FAILS" ] && exit 1; [ -n "$FAKE_GH_VIEW" ] && echo "[$FAKE_GH_VIEW]" || echo "[]" ;;
 esac
 `;
 
@@ -281,17 +282,24 @@ describe("note sweep", { timeout: 120_000 }, () => {
     // While no PR has them, no new sweep starts.
     expect(await sweep(alpha, { ...quiet, carry: true, all: true })).toBeNull();
 
-    // Not asked on main, nor on a branch with no open PR; the Stop hook asks a branch with one, once per session.
+    // Not asked on main, nor on a branch with no work yet; the Stop hook asks a branch with work and no PR, once per session.
     expect(carryNudge(w.repo)).toBeNull();
     git(w.repo, "checkout", "-q", "-b", "feat/x");
     expect(carryNudge(w.repo)).toBeNull();
-    process.env.FAKE_GH_VIEW = pr9("OPEN");
-    expect(carryNudge(w.repo)).toMatch(/absorbed 1 note into docs\/local-dev\.md.*PR #9 on this branch\. Run `docsic sweep apply`/);
+    write(w.repo, "src/x.ts", "export {};\n");
+    expect(carryNudge(w.repo)).toMatch(/absorbed 1 note into docs\/local-dev\.md.*this branch's, which has work and no PR yet\. Run `docsic sweep apply`/);
     const stop = () => execFileSync(TSX, [CLI, "hook", "stop"], { input: JSON.stringify({ cwd: w.repo, session_id: "s1" }), encoding: "utf8", env: process.env });
     expect(JSON.parse(stop())).toMatchObject({ decision: "block", reason: expect.stringContaining("docsic sweep apply") });
     expect(stop()).toBe("");
 
-    expect(applyCarry(w.repo).message).toMatch(/wrote the sweep edits for 1 note into docs\/local-dev\.md\. Commit and push them to PR #9/);
+    // A branch with a PR, open or in the merge queue, is left alone; so is one gh cannot answer for.
+    process.env.FAKE_GH_LIST_FAILS = "1";
+    expect(carryNudge(w.repo)).toBeNull();
+    delete process.env.FAKE_GH_LIST_FAILS;
+    process.env.FAKE_GH_VIEW = pr9("OPEN");
+    expect(carryNudge(w.repo)).toBeNull();
+
+    expect(applyCarry(w.repo).message).toMatch(/wrote the sweep edits for 1 note into docs\/local-dev\.md\. Commit them and push them to PR #9/);
     expect(fm(join(w.repo, "docs/local-dev.md"))).toContain("Start redis before the worker.");
     expect(carryNudge(w.repo)).toBeNull();
 

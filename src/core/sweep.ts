@@ -678,7 +678,9 @@ function pendingCarry(cwd: string): { root: string; f: Paths; carries: Carry[]; 
 
 /**
  * For the Stop hook: when sweep edits wait to ride a PR and this session's
- * branch has an open one, what to ask the session to do; else null.
+ * branch has work on it and no PR yet, what to ask the session to do; else
+ * null. A branch with a PR, open or queued, is left alone: edits written into
+ * it now would cost another push and CI run, or stop a merge.
  */
 export function carryNudge(cwd: string): string | null {
   try { return nudge(cwd); } catch { return null; } // the Stop hook must never fail on this
@@ -688,10 +690,13 @@ function nudge(cwd: string): string | null {
   const p = pendingCarry(cwd);
   if (!p) return null;
   const branch = git(p.root, ["symbolic-ref", "--short", "-q", "HEAD"]);
-  if (!branch || `origin/${branch}` === originDefault(p.root)) return null;
-  const pr = prView(p.root);
-  if (pr?.state !== "OPEN") return null;
-  return `docsic: the note sweep absorbed ${plural(p.carry.notes.length, "note")} into ${p.carry.files.join(", ")}, and those edits wait to ride the next PR into this repo: PR #${pr.number} on this branch. Run \`docsic sweep apply\`, then commit and push them with this PR.`;
+  const base = originDefault(p.root);
+  if (!branch || `origin/${branch}` === base) return null;
+  const hasWork = git(p.root, ["rev-list", "--count", `${base}..HEAD`]) !== "0" || !!git(p.root, ["status", "--porcelain"]);
+  if (!hasWork) return null;
+  const prs = gh(p.root, ["pr", "list", "--head", branch, "--state", "all", "--json", "number", "--limit", "1"], 15_000); // the Stop hook waits on it
+  if (!prs.ok || prs.out.trim() !== "[]") return null;
+  return `docsic: the note sweep absorbed ${plural(p.carry.notes.length, "note")} into ${p.carry.files.join(", ")}, and those edits wait to ride the next PR into this repo: this branch's, which has work and no PR yet. Run \`docsic sweep apply\`, then commit them with this branch's work.`;
 }
 
 /** `docsic sweep apply`: writes the waiting sweep edits into this checkout, so they ride its branch's PR. */
@@ -710,7 +715,7 @@ export function applyCarry(cwd: string): { ok: boolean; message: string } {
   const open = pr?.state === "OPEN" ? pr.number : undefined;
   carry.applied = { branch: git(root, ["symbolic-ref", "--short", "-q", "HEAD"]) || "HEAD", ...(open ? { pr: open } : {}), date: today() };
   writeCarries(f, carries);
-  return { ok: true, message: `docsic: wrote the sweep edits for ${notes} into ${carry.files.join(", ")}. Commit and push them ${open ? `to PR #${open}` : "with this branch's PR"}; the notes move to the archive once the edits reach ${carry.base}.` };
+  return { ok: true, message: `docsic: wrote the sweep edits for ${notes} into ${carry.files.join(", ")}. Commit them ${open ? `and push them to PR #${open}` : "with this branch's work"}; the notes move to the archive once the edits reach ${carry.base}.` };
 }
 
 function gh(cwd: string, args: string[], timeoutMs?: number): { ok: boolean; out: string; err: string } {

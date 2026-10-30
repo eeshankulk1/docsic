@@ -29,7 +29,7 @@ export interface HubConfig {
 
 export interface UserConfig {
   hub?: HubConfig;
-  /** Session-end distiller: "auto" spawns a background agent that rewrites state and files notes. */
+  /** Distiller: "auto" spawns a background agent that rewrites state and files notes, once per plain session or rollcall task. */
   distill?: "auto" | "off";
   /**
    * Note sweep: "auto" starts a background agent at session end when a
@@ -37,8 +37,8 @@ export interface UserConfig {
    * each, and opens and merges one docs-only PR for what it absorbed. "pr"
    * does the same but leaves the PR for a person to review and merge. "carry"
    * stages the docs edits instead, and the Stop hook asks the next session
-   * whose branch has an open PR to write them into it; edits no PR picks up
-   * in a week go out as a docs-only PR, merged on green.
+   * whose branch has work and no PR yet to write them into it; edits no PR
+   * picks up in a week go out as a docs-only PR, merged on green.
    */
   sweep?: "auto" | "pr" | "carry" | "off";
 }

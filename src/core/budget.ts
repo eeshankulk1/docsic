@@ -13,6 +13,53 @@ export const DECISIONS_BUDGET = 600;
 export const NOTES_BUDGET = 400;
 export const STALE_NOTE_DAYS = 30;
 
+/**
+ * Characters one hook may print. Claude Code saves hook output over 10,000
+ * characters to a file and shows the model a 2 KB preview, so a longer payload
+ * loses everything after its first screen. The margin keeps clear of that line.
+ */
+export const HOOK_LIMIT = 9_800;
+
+/** A piece of a hook's output. `more` says where the rest is if it gets cut; a block without one is short and fixed. */
+export interface Block { text: string; more?: string }
+
+const SEP = "\n\n";
+const cutNote = (b: Block) => (b.more ? `[cut to fit: the rest is in ${b.more}]` : "");
+const cutLines = (text: string, n: number) => text.slice(0, Math.max(0, text.lastIndexOf("\n", n)));
+
+/**
+ * Joins blocks given in order of worth under `limit`. Each takes what is left,
+ * cut at a line end, and a cut block says where the rest is. Room for those
+ * lines is held back up front, so every block keeps at least its pointer.
+ */
+export function fitPayload(blocks: Block[], limit = HOOK_LIMIT): string {
+  const kept = blocks.filter(b => b.text);
+  let room = limit - kept.reduce((n, b) => n + cutNote(b).length + SEP.length, 0);
+  const out: string[] = [];
+  for (const b of kept) {
+    const note = cutNote(b);
+    room += note.length + SEP.length;
+    const text = b.text.length + SEP.length <= room ? b.text : [cutLines(b.text, room - note.length - SEP.length - 1), note].filter(Boolean).join("\n");
+    if (text) out.push(text);
+    room -= text.length + SEP.length;
+  }
+  const all = out.join(SEP);
+  return all.length <= limit ? all : cutLines(all, limit); // only when there are too many blocks for even their pointers
+}
+
+/** Several payloads in one hook's output: the smallest go first, so a short one leaves its share to the long ones. */
+export function fitGroups(groups: Block[][], limit = HOOK_LIMIT): string {
+  const size = (g: Block[]) => g.reduce((n, b) => n + b.text.length, 0);
+  const smallFirst = groups.map((_, i) => i).sort((a, b) => size(groups[a]) - size(groups[b]));
+  const out: string[] = [];
+  let left = limit;
+  smallFirst.forEach((g, i) => {
+    out[g] = fitPayload(groups[g], Math.floor(left / (smallFirst.length - i)));
+    left -= out[g].length + SEP.length;
+  });
+  return out.filter(Boolean).join(SEP);
+}
+
 /** Items in order until their rendered lines would pass `budget` tokens; the first always fits. */
 export function takeWithin<T>(items: T[], budget: number, line: (t: T) => string): { lines: string[]; shown: T[]; rest: T[] } {
   const lines: string[] = [];

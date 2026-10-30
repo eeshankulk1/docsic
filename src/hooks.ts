@@ -6,7 +6,7 @@ import { runMechanicalChecks } from "./core/check.js";
 import { configPath } from "./core/config.js";
 import { loadHub, projectDir, readUserConfig, renderProject, resolveScope, snapshot, syncHub, workspaceSnapshot, type Hub, type HubProject } from "./core/hub.js";
 import { load } from "./core/load.js";
-import { moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./core/budget.js";
+import { fitGroups, fitPayload, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin, type Block } from "./core/budget.js";
 import { memoryHome, STATE_BUDGET } from "./core/memory.js";
 import { carryNudge, pickSweep, startSweep, sweepTargetFor } from "./core/sweep.js";
 import { findRepoRoot, git, managedRoot } from "./core/repo.js";
@@ -56,36 +56,46 @@ export async function hook(event: string, fallbackRoot: string): Promise<void> {
   if (event === "session-end") return sessionEnd(cwd, root, session, initialized, hub, scope, p.transcript_path);
 }
 
+const RECALL = `Cross-project recall ("have I solved X before, anywhere?"): \`docsic recall --hub <terms>\`.`;
+
+/** The whole payload goes through fitPayload, in order of worth: anything over the limit never reaches the model. */
 function sessionStart(root: string, session: string, initialized: boolean, hub: Hub | null, scope: ReturnType<typeof resolveScope>): void {
-  const out: string[] = [];
+  const out: Block[] = [];
   const project = scope?.kind === "project" ? scope.project : null;
+  const inHub = hub ? [{ text: RECALL }] : [];
   if (initialized) {
     const d = load(root);
+    const home = memoryHome(root).dir;
+    const inLoad = "the docsic_load tool";
+    // Entry files for the worklog are history, one per PR; a long-lived repo has hundreds. docsic_load lists them.
+    const docs = d.docs.filter(x => !x.path.startsWith("docs/worklog/"));
     out.push(
-      "[docsic] session context",
-      d.state ? `## State\n${d.state.trim()}` : "## State\n(none yet - docsic_save state before you stop)",
-      openNotesBlock(root, d.notes),
-      `## Docs\n${d.docs.map(x => `- ${x.path}${x.status && x.status !== "current" ? ` [${x.status}]` : ""}`).join("\n")}`,
-      d.queue.length ? `## Queue\n${d.queue.slice(0, 10).map(q => `- #${q.id} ${q.title}`).join("\n")}` : "",
-      d.findings.length ? `## docsic_check\n${d.findings.map(f => `- ${f.rule} ${f.file}: ${f.message}`).join("\n")}` : "",
-      d.instructions,
+      { text: "[docsic] session context" },
+      { text: d.instructions },
+      ...inHub,
+      { text: openNotesBlock(root, d.notes), more: join(home, "notes") },
+      { text: d.state ? `## State\n${d.state.trim()}` : "## State\n(none yet - docsic_save state before you stop)", more: join(home, "state.md") },
+      { text: d.findings.length ? `## docsic_check\n${d.findings.map(f => `- ${f.rule} ${f.file}: ${f.message}`).join("\n")}` : "", more: inLoad },
     );
     // State and notes above already come from the hub; add only its memory map.
     if (hub && project) out.push(...renderProject(hub, project, { state: false, notes: false }).blocks);
+    out.push(
+      { text: `## Docs\n${docs.map(x => `- ${x.path}${x.status && x.status !== "current" ? ` [${x.status}]` : ""}`).join("\n")}`, more: inLoad },
+      { text: d.queue.length ? `## Queue\n${d.queue.slice(0, 10).map(q => `- #${q.id} ${q.title}`).join("\n")}` : "", more: inLoad },
+    );
   } else if (hub && project) {
-    out.push(`[docsic] memory for **${project.slug}** (hub: ${projectDir(hub, project.slug)})`);
+    out.push({ text: `[docsic] memory for **${project.slug}** (hub: ${projectDir(hub, project.slug)})` });
     const id = identity(hub, project);
-    if (id) out.push(`Identity: ${id}`);
-    out.push(...renderProject(hub, project).blocks);
+    if (id) out.push({ text: `Identity: ${id}`, more: join(projectDir(hub, project.slug), "README.md") });
+    out.push({ text: "If state.md is stale or missing in-flight facts, update it as you learn them." }, ...inHub, ...renderProject(hub, project).blocks);
     const wl = recentWorklog(project);
-    if (wl.length) out.push(`Recent worklog:\n${wl.join("\n")}`);
-    out.push("If state.md is stale or missing in-flight facts, update it as you learn them.");
+    if (wl.length) out.push({ text: `Recent worklog:\n${wl.join("\n")}`, more: join(project.repo!, "docs", "worklog") });
   } else if (hub) {
     const lines = workspaceSnapshot(hub);
-    if (lines.length) out.push(`[docsic] project snapshot (full detail: ${hub.root}/projects/<slug>/state.md + notes/)\n${lines.join("\n")}`,
-      "When this session starts working on one of these projects, read its state.md first.");
+    if (lines.length) out.push({ text: "When this session starts working on one of these projects, read its state.md first." });
+    out.push(...inHub);
+    if (lines.length) out.push({ text: `[docsic] project snapshot (full detail: ${hub.root}/projects/<slug>/state.md + notes/)\n${lines.join("\n")}`, more: join(hub.root, "projects") });
   }
-  if (hub) out.push(`Cross-project recall ("have I solved X before, anywhere?"): \`docsic recall --hub <terms>\`.`);
 
   const marker: Marker = {
     head: initialized ? git(root, ["rev-parse", "HEAD"]) : "",
@@ -93,7 +103,7 @@ function sessionStart(root: string, session: string, initialized: boolean, hub: 
     injected: project ? [project.slug] : [],
   };
   writeFileSync(markerPath(session), JSON.stringify(marker));
-  const text = out.filter(Boolean).join("\n\n");
+  const text = fitPayload(out);
   if (text) console.log(text);
 }
 
@@ -105,12 +115,12 @@ function openNotesBlock(root: string, notes: ReturnType<typeof load>["notes"]): 
   return `## Open notes\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`;
 }
 
-/** First mention of a hub project injects its memory; writes by parallel sessions are injected as a delta. */
+/** First mention of a hub project injects its memory; writes by parallel sessions are injected as a delta. All of it shares one hook's limit. */
 function promptSubmit(session: string, prompt: string, hub: Hub | null): void {
   if (!hub) return;
   const m = readMarker(session) ?? { head: "", files: {}, injected: [] };
   const current = snapshot(hub);
-  const out: string[] = [];
+  const groups: Block[][] = [];
   const shown = new Set<string>();
   for (const p of hub.projects) {
     if (m.injected.includes(p.slug) || hub.skipPromptMatch.includes(p.slug)) continue;
@@ -118,18 +128,19 @@ function promptSubmit(session: string, prompt: string, hub: Hub | null): void {
     const r = renderProject(hub, p);
     if (!r.blocks.length) continue;
     m.injected.push(p.slug);
-    out.push(`[docsic] memory for **${p.slug}** (first mention this session):`, ...r.blocks);
+    groups.push([{ text: `[docsic] memory for **${p.slug}** (first mention this session):` }, ...r.blocks]);
     r.paths.forEach(x => shown.add(x));
   }
   if (Object.keys(m.files).length) {
     const delta = Object.keys(current).filter(x => current[x] !== m.files[x] && !shown.has(x));
-    if (delta.length) {
-      out.push("[docsic] project memory changed since this session last read it (another session or worktree):");
-      for (const x of delta.slice(0, 6)) out.push(`--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").slice(0, 4096).trim()}`);
-    }
+    if (delta.length) groups.push([
+      { text: "[docsic] project memory changed since this session last read it (another session or worktree):" },
+      ...delta.map(x => ({ text: `--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").trim()}`, more: x })),
+    ]);
   }
   writeFileSync(markerPath(session), JSON.stringify({ ...m, files: current }));
-  if (out.length) console.log(out.join("\n\n"));
+  const text = fitGroups(groups);
+  if (text) console.log(text);
 }
 
 /** Blocks once per session for each of: check errors in files the session touched, sweep edits that can ride this branch's open PR. */

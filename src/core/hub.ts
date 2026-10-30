@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { DECISIONS_BUDGET, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin } from "./budget.js";
+import { DECISIONS_BUDGET, moreNotesLine, NOTES_BUDGET, orderNotes, takeWithin, type Block } from "./budget.js";
 import { parseFrontmatter } from "./frontmatter.js";
 import { managedRoot } from "./repo.js";
 
@@ -147,6 +147,13 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n).trimEnd(
 function memoryMap(hub: Hub, p: HubProject): string[] {
   const dir = projectDir(hub, p.slug);
   const lines: string[] = [];
+  // The doc lists come first: if the payload is cut, it loses the oldest decision rows, not the way to the docs.
+  const extras = existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith(".md") && !["README.md", "state.md", "decisions.md"].includes(f)) : [];
+  if (extras.length) lines.push(`Other hub docs (${dir}/): ${extras.join(", ")}`);
+  if (p.repo && existsSync(join(p.repo, "docs"))) {
+    const docs = readdirSync(join(p.repo, "docs")).filter(f => f.endsWith(".md"));
+    if (docs.length) lines.push(`Repo docs (${join(p.repo, "docs")}/): ${docs.join(", ")}`);
+  }
   const rows = parseDecisionRows(readIf(join(dir, "decisions.md"), 131072));
   if (rows.length) {
     lines.push(`decisions.md (${rows.length} rows; read the full row before changing what it governs):`);
@@ -156,32 +163,30 @@ function memoryMap(hub: Hub, p: HubProject): string[] {
     lines.push(...fit.lines);
     if (fit.rest.length) lines.push(`+${fit.rest.length} older row${fit.rest.length > 1 ? "s" : ""} in decisions.md - search with docsic recall <terms> or read the file`);
   }
-  const extras = existsSync(dir) ? readdirSync(dir).filter(f => f.endsWith(".md") && !["README.md", "state.md", "decisions.md"].includes(f)) : [];
-  if (extras.length) lines.push(`Other hub docs (${dir}/): ${extras.join(", ")}`);
-  if (p.repo && existsSync(join(p.repo, "docs"))) {
-    const docs = readdirSync(join(p.repo, "docs")).filter(f => f.endsWith(".md"));
-    if (docs.length) lines.push(`Repo docs (${join(p.repo, "docs")}/): ${docs.join(", ")}`);
-  }
   return lines;
 }
 
-/** State, memory map and open notes for one project. `paths` lets freshness tracking skip what was just shown. */
-export function renderProject(hub: Hub, p: HubProject, opts: { state?: boolean; notes?: boolean } = {}): { blocks: string[]; paths: string[] } {
+/**
+ * Open notes, state and memory map for one project, in order of worth: a hook
+ * that runs out of room cuts from the end (gotchas lead the notes, so they
+ * survive). `paths` lets freshness tracking skip what was just shown.
+ */
+export function renderProject(hub: Hub, p: HubProject, opts: { state?: boolean; notes?: boolean } = {}): { blocks: Block[]; paths: string[] } {
   const dir = projectDir(hub, p.slug);
-  const blocks: string[] = [];
+  const blocks: Block[] = [];
   const paths: string[] = [];
-  const statePath = join(dir, "state.md");
-  const state = opts.state === false ? null : readIf(statePath, 6144);
-  if (state) { blocks.push(`--- state.md (current; rewritten each session end) ---\n${state.trim()}`); paths.push(statePath); }
-  const map = memoryMap(hub, p);
-  if (map.length) blocks.push(`--- memory map (index only; read sources on demand) ---\n${map.join("\n")}`);
   const notes = opts.notes === false ? [] : orderNotes(openNotes(dir));
   if (notes.length) {
     const fit = takeWithin(notes, NOTES_BUDGET, n => `- [${n.type}${n.pinned ? ", pinned" : ""}] ${n.title} -> ${n.path}`);
     const more = moreNotesLine(fit.rest, join(dir, "notes"));
-    blocks.push(`Open notes (read with the path when relevant; mark absorbed when acted on):\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`);
+    blocks.push({ text: `Open notes (read with the path when relevant; mark absorbed when acted on):\n${[...fit.lines, ...(more ? [more] : [])].join("\n")}`, more: join(dir, "notes") });
     paths.push(...fit.shown.map(n => n.path));
   }
+  const statePath = join(dir, "state.md");
+  const state = opts.state === false ? null : readIf(statePath, Infinity);
+  if (state) { blocks.push({ text: `--- state.md (current; rewritten each session end) ---\n${state.trim()}`, more: statePath }); paths.push(statePath); }
+  const map = memoryMap(hub, p);
+  if (map.length) blocks.push({ text: `--- memory map (index only; read sources on demand) ---\n${map.join("\n")}`, more: join(dir, "decisions.md") });
   return { blocks, paths };
 }
 

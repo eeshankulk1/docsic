@@ -93,6 +93,74 @@ describe("hooks", () => {
     expect(readFileSync(join(home, "sessions", "b.json"), "utf8")).toContain("beta");
   });
 
+  describe("no hook prints past Claude Code's 10,000 character line", () => {
+    const LINE = 10_000;
+    const big = (word: string, n: number) => Array.from({ length: n }, (_, i) => `- ${word} ${i} ${"x".repeat(60)}`).join("\n");
+
+    /** A project with far more memory than fits: long state, decisions, many notes with one gotcha among them. */
+    function overfull(hubRoot: string, slug: string): void {
+      write(hubRoot, `projects/${slug}/README.md`, `# ${slug}\n\nWhat ${slug} is.\n`);
+      write(hubRoot, `projects/${slug}/state.md`, `## Now\n${big(`${slug}-state`, 150)}\n## In flight\n## Next\n`);
+      write(hubRoot, `projects/${slug}/decisions.md`, `| Date | Decision | Reasoning |\n|---|---|---|\n${Array.from({ length: 80 }, (_, i) => `| 2026-01-${String(i % 28 + 1).padStart(2, "0")} | decision ${i} ${"y".repeat(120)} | why |`).join("\n")}\n`);
+      for (let i = 0; i < 12; i++) write(hubRoot, `projects/${slug}/notes/2026-01-${String(i + 1).padStart(2, "0")}-n.md`, `---\ntitle: ${i === 5 ? `${slug} gotcha` : `idea ${i}`}\ntype: ${i === 5 ? "gotcha" : "idea"}\nstatus: open\ncreated: 2026-01-${String(i + 1).padStart(2, "0")}\n---\nbody\n`);
+    }
+
+    function setup(): { repos: string; hubRoot: string } {
+      const repos = realpathSync(mkdtempSync(join(tmpdir(), "docsic-repos-")));
+      const hubRoot = join(repos, "brain");
+      for (const slug of ["alpha", "beta", "gamma"]) overfull(hubRoot, slug);
+      writeFileSync(join(process.env.DOCSIC_HOME!, "config.json"), JSON.stringify({ hub: { root: hubRoot, reposRoot: repos, sync: "none" } }));
+      return { repos, hubRoot };
+    }
+
+    it("in a hub project: gotchas and state stay, the rest says where it went", () => {
+      const { repos, hubRoot } = setup();
+      mkdirSync(join(repos, "alpha"), { recursive: true });
+      const out = hook(join(repos, "alpha"), "session-start", "h1");
+      expect(out.length).toBeLessThanOrEqual(LINE);
+      expect(out).toContain("[gotcha] alpha gotcha");
+      expect(out).toContain("alpha-state 0");
+      expect(out).toContain(`[cut to fit: the rest is in ${join(hubRoot, "projects/alpha")}`);
+    });
+
+    it("in an initialized repo: same, and worklog entry files stay out of the doc list", () => {
+      const { repos } = setup();
+      const repo = join(repos, "alpha");
+      mkdirSync(repo, { recursive: true });
+      execFileSync("git", ["init", "-q"], { cwd: repo });
+      write(repo, "docs/docsic.json", "{}");
+      write(repo, "docs/architecture.md", "---\nowns: [src/**]\nstatus: current\n---\n# A\n");
+      for (let i = 0; i < 300; i++) write(repo, `docs/worklog/2026-10/2026-10-01-pr-${i}.json`, "{}\n");
+      const out = hook(repo, "session-start", "h2");
+      expect(out.length).toBeLessThanOrEqual(LINE);
+      expect(out).toContain("alpha gotcha");
+      expect(out).toContain("alpha-state 0");
+      expect(out).toContain("docs/architecture.md");
+      expect(out).not.toContain("docs/worklog/");
+    });
+
+    it("at the first mention of several projects, with parallel writes on top", () => {
+      const { repos, hubRoot } = setup();
+      hook(repos, "session-start", "h3");
+      for (let i = 0; i < 9; i++) write(hubRoot, `projects/gamma/notes/2026-02-0${i + 1}-new.md`, `---\ntitle: parallel ${i}\ntype: idea\nstatus: open\ncreated: 2026-02-0${i + 1}\n---\n${big("written", 80)}\n`);
+      const out = hook(repos, "prompt-submit", "h3", { prompt: "compare alpha with beta" });
+      expect(out.length).toBeLessThanOrEqual(LINE);
+      expect(out).toContain("[gotcha] alpha gotcha");
+      expect(out).toContain("[gotcha] beta gotcha");
+      expect(out).toContain("beta-state 0");
+      expect(out).toContain("project memory changed since");
+    });
+
+    it("in the workspace, with many projects", () => {
+      const { repos, hubRoot } = setup();
+      for (let i = 0; i < 300; i++) write(hubRoot, `projects/p${i}/state.md`, `## Now\n- ${"z".repeat(120)}\n## In flight\n## Next\n`);
+      const out = hook(repos, "session-start", "h4");
+      expect(out.length).toBeLessThanOrEqual(LINE);
+      expect(out).toContain("**alpha**");
+      expect(out).toContain("docsic recall --hub");
+    });
+  });
+
   it("with sweep auto: session end starts a sweep for a project whose notes are due", () => {
     const repos = mkdtempSync(join(tmpdir(), "docsic-repos-"));
     const hubRoot = join(repos, "brain");

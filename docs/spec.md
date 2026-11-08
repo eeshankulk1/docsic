@@ -7,7 +7,7 @@ status: current
 
 # docsic - Specification v1
 
-> Working name. The system keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.
+> Working name. The system keeps a codebase readable for coding agents as the code changes.
 
 Status: draft, 2026-08-23. Derived from the docs-standard v2 rollout across throu/trvld/sideline/shopir-ai and a full cold-start migration of Cordinate-App (1,123 files, 33 scattered markdown files, no structure).
 

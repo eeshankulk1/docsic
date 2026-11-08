@@ -19,7 +19,7 @@ const args = rest.filter(a => !a.startsWith("--"));
 /** the value after a flag: `--base origin/main` */
 const opt = (name: string): string | undefined => { const i = rest.indexOf(name); return i >= 0 ? rest[i + 1] : undefined; };
 
-const HELP = `docsic - keeps a codebase legible to coding agents
+const HELP = `docsic - keeps a codebase readable for coding agents
 
   npx @eeshkulk/docsic init [--yes]  register with every coding agent on this machine, then initialize this repo
   docsic check [--json]      mechanical checks (exit 1 on errors; use in CI for a hard gate)

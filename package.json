@@ -1,7 +1,7 @@
 {
   "name": "@eeshkulk/docsic",
   "version": "0.6.0",
-  "description": "Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes.",
+  "description": "Keeps a codebase readable for coding agents: docs checks, a docs gate on every PR, project memory over MCP, and note sweeps.",
   "keywords": [
     "mcp",
     "claude-code",

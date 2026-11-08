@@ -1,6 +1,8 @@
 # docsic
 
-Keeps a codebase legible to coding agents, and keeps that legibility true as the code changes. For anyone running Claude Code, Codex or Cursor on a real repo; one command to start: `npx @eeshkulk/docsic init`.
+docsic keeps a codebase readable for coding agents. It checks a repo's docs mechanically (`check`) and fails a PR whose code changes touch files a doc owns unless that doc is edited or waived with a reason (`gate`). It also gives each session its project memory at startup (`load`), searches docs, notes and the cross-project hub (`recall`), and runs as an MCP server for agents (`serve`). Finally, it sweeps open notes, with an agent deciding whether to absorb, cover, renew or retire each one, and ships the absorbed content as a docs-only PR (`sweep`).
+
+Works with Claude Code, Codex and Cursor. One command to start: `npx @eeshkulk/docsic init`.
 
 ## What it does
 

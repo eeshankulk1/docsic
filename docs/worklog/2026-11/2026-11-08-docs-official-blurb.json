@@ -1,0 +1,1 @@
+{"date": "2026-11-08", "project": "docsic", "summary": "The README now opens with the owner's blurb naming what each command does, and the package description, CLI help and docs say \"readable for coding agents\" in place of the old \"legible\" tagline.", "pr": 13, "why": "One plain description of docsic everywhere it introduces itself."}

@@ -5,7 +5,7 @@ status: current
 
 # docsic - Architecture
 
-A CLI + MCP server that keeps a codebase legible to coding agents and keeps that legibility true as the code changes. The full design is in [spec.md](spec.md); this doc is the map of the implementation.
+A CLI + MCP server that keeps a codebase readable for coding agents as the code changes. The full design is in [spec.md](spec.md); this doc is the map of the implementation.
 
 ## What this is
 

@@ -92,6 +92,16 @@ describe("budgeted memory map", () => {
     expect(tokenBudget(map)).toBeLessThan(DECISIONS_BUDGET + 150);
   });
 
+  it("reads a decisions file of any size, so its newest rows show", () => {
+    const h = hub();
+    const rows = Array.from({ length: 1500 }, (_, i) => `| 2026-01-01 | old decision ${i} ${"y".repeat(150)} | why |`);
+    rows.push("| 2026-11-12 | the newest decision | why |");
+    write(h.root, "projects/p/decisions.md", `# Decisions\n\n| Date | Decision | Reasoning |\n|---|---|---|\n${rows.join("\n")}\n`);
+    const map = renderProject(h, h.projects[0]).blocks.map(b => b.text).find(b => b.includes("decisions.md"))!;
+    expect(map).toContain("decisions.md (1501 rows");
+    expect(map).toContain("2026-11-12: the newest decision");
+  });
+
   it("lists open notes by value within budget; paths cover only what was shown", () => {
     const h = hub();
     for (let i = 0; i < 30; i++) {

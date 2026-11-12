@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { findAgent } from "../src/core/agent.js";
 import { configPath } from "../src/core/config.js";
-import { distillPrompt } from "../src/hooks.js";
+import { distillPrompt, ownWords } from "../src/hooks.js";
 import type { Task } from "../src/core/rollcall.js";
 import { commit, tmpRepo, write } from "./helpers.js";
 
@@ -88,12 +88,35 @@ describe("hooks", () => {
     expect(ws).toContain("**alpha**: alpha ships v2");
     expect(ws).toContain("**beta**: beta paused");
 
-    // First mention injects full memory once; a parallel write shows up as a delta.
+    // First mention injects full memory once; a parallel write is named by path.
     expect(hook(repos, "prompt-submit", "b", { prompt: "what's next on beta?" })).toContain("memory for **beta** (first mention");
     expect(hook(repos, "prompt-submit", "b", { prompt: "and beta again" })).toBe("");
     write(hubRoot, "projects/alpha/state.md", "## Now\n- alpha v3 cut\n## In flight\n## Next\n");
-    expect(hook(repos, "prompt-submit", "b", { prompt: "unrelated" })).toContain("alpha v3 cut");
+    const delta = hook(repos, "prompt-submit", "b", { prompt: "unrelated" });
+    expect(delta).toContain(join(hubRoot, "projects", "alpha", "state.md"));
+    expect(delta).not.toContain("alpha v3 cut");
     expect(readFileSync(join(home, "sessions", "b.json"), "utf8")).toContain("beta");
+  });
+
+  it("injects a project's memory only when the owner's own words name it", () => {
+    const repos = mkdtempSync(join(tmpdir(), "docsic-repos-"));
+    const hubRoot = join(repos, "brain");
+    write(hubRoot, "projects/alpha/state.md", "## Now\n- alpha ships v2\n## In flight\n## Next\n");
+    writeFileSync(join(process.env.DOCSIC_HOME!, "config.json"), JSON.stringify({ hub: { root: hubRoot, reposRoot: repos, sync: "none" } }));
+    hook(repos, "session-start", "o");
+    const report = "<task-notification>\n<result>audit done: alpha has 3 stale docs</result>\n</task-notification>";
+    expect(hook(repos, "prompt-submit", "o", { prompt: report })).toBe("");
+    expect(hook(repos, "prompt-submit", "o", { prompt: "[rollcall] 1a2b3c4d (main) is also in alpha, active just now" })).toBe("");
+    expect(hook(repos, "prompt-submit", "o", { prompt: `${report}\nok, now look at alpha` })).toContain("memory for **alpha**");
+  });
+
+  it("reads a rollcall worker's first prompt for the owner's words alone", () => {
+    const brief = "You are the worker for task t5, in kesselrunner.\n\n## The owner's words (verbatim: these are the task)\n\nfix the alpha login\n\n## The supervisor's notes\n\n- beta did this before\n";
+    expect(ownWords(brief)).toContain("alpha");
+    expect(ownWords(brief)).not.toContain("beta");
+    expect(ownWords("You are the worker for task t5.\n\n## The supervisor's notes\n\n- alpha\n")).not.toContain("alpha");
+    expect(ownWords("a plain prompt about beta")).toContain("beta");
+    expect(ownWords("<agent-message from=\"x\">beta report</agent-message> and alpha")).not.toContain("beta");
   });
 
   describe("no hook prints past Claude Code's 10,000 character line", () => {
@@ -151,7 +174,7 @@ describe("hooks", () => {
       expect(out).toContain("[gotcha] alpha gotcha");
       expect(out).toContain("[gotcha] beta gotcha");
       expect(out).toContain("beta-state 0");
-      expect(out).toContain("project memory changed since");
+      expect(out).toContain("changed project memory since");
     });
 
     it("in the workspace, with many projects", () => {
@@ -208,8 +231,8 @@ describe("hooks", () => {
       write(w.hubRoot, "projects/alpha/state.md", "## Now\n- alpha moved\n## In flight\n## Next\n");
       write(w.hubRoot, "projects/beta/state.md", "## Now\n- beta moved\n## In flight\n## Next\n");
       const delta = hook(w.repos, "prompt-submit", "sup", { prompt: "anything new?" });
-      expect(delta).toContain("alpha moved");
-      expect(delta).not.toContain("beta moved");
+      expect(delta).toContain(join(w.hubRoot, "projects", "alpha", "state.md"));
+      expect(delta).not.toContain(join(w.hubRoot, "projects", "beta", "state.md"));
 
       // Once a task opens there, its project is injected at the next mention.
       process.env.FAKE_ROLLCALL_STATUS = JSON.stringify({ me: { home: "falcon" }, tasks: [{ repo: "beta", state: "working" }] });

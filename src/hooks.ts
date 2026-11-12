@@ -120,16 +120,18 @@ function openNotesBlock(root: string, notes: ReturnType<typeof load>["notes"]): 
 }
 
 /**
- * First mention of a hub project injects its memory; writes by parallel
- * sessions are injected as a delta. All of it shares one hook's limit. A
- * supervisor reads no repo, so it gets only the projects it has an open task in.
+ * The owner's first mention of a hub project injects its memory; writes by
+ * parallel sessions are named by path, for the session to read when they bear
+ * on its work. All of it shares one hook's limit. A supervisor reads no repo,
+ * so it gets only the projects it has an open task in.
  */
 function promptSubmit(cwd: string, session: string, prompt: string, hub: Hub | null): void {
   if (!hub) return;
   const m = readMarker(session) ?? { head: "", files: {}, injected: [] };
   const current = snapshot(hub);
+  const said = ownWords(prompt);
   const mentioned = hub.projects.filter(p => !m.injected.includes(p.slug) && !hub.skipPromptMatch.includes(p.slug)
-    && p.match.some(t => new RegExp(`\\b${esc(t)}\\b`, "i").test(prompt)));
+    && p.match.some(t => new RegExp(`\\b${esc(t)}\\b`, "i").test(said)));
   const changed = Object.keys(m.files).length ? Object.keys(current).filter(x => current[x] !== m.files[x]) : [];
   const tasked = mentioned.length || changed.length ? supervisorProjects(session, cwd, hub) : null;
   const groups: Block[][] = [];
@@ -144,12 +146,29 @@ function promptSubmit(cwd: string, session: string, prompt: string, hub: Hub | n
   }
   const delta = changed.filter(x => !shown.has(x) && (!tasked || [...tasked].some(slug => x.startsWith(`${projectDir(hub, slug)}/`))));
   if (delta.length) groups.push([
-    { text: "[docsic] project memory changed since this session last read it (another session or worktree):" },
-    ...delta.map(x => ({ text: `--- ${basename(x)} (${x}) ---\n${readFileSync(x, "utf8").trim()}`, more: x })),
+    { text: "[docsic] another session or worktree changed project memory since this session read it; read what bears on your work:" },
+    ...delta.map(x => ({ text: `- ${x}` })),
   ]);
   writeFileSync(markerPath(session), JSON.stringify({ ...m, files: current, supervisor: m.supervisor || !!tasked }));
   const text = fitGroups(groups);
   if (text) console.log(text);
+}
+
+/**
+ * The part of a prompt the owner wrote. Text the harness delivers as a prompt
+ * (a subagent's report, a task notification, a hook's reminder, a shell
+ * command's output) and rollcall's notices name projects too, and memory
+ * follows only what the owner brings up. A rollcall worker's first prompt holds
+ * the owner's words under their own heading, beside the supervisor's notes and
+ * the worker contract.
+ */
+export function ownWords(prompt: string): string {
+  let p = prompt;
+  if (/^You are the worker for task/.test(p)) { // no owner's-words section: the brief holds only contract and notes
+    p = p.match(/^## The owner's words[^\n]*\n([\s\S]*?)(?=^## |(?![\s\S]))/m)?.[1] ?? "";
+  }
+  p = p.replace(/<(task-notification|agent-message|system-reminder|bash-stdout|bash-stderr|local-command-stdout|local-command-stderr)\b[\s\S]*?<\/\1>/g, " ");
+  return p.split("\n").filter(l => !l.startsWith("[rollcall]")).join("\n");
 }
 
 /** Blocks once per session for each of: check errors in files the session touched, sweep edits that can ride this branch's coming PR. */

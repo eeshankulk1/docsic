@@ -1,1 +1,1 @@
-{"date": "2026-11-12", "project": "docsic", "summary": "Version 0.7.0: the hooks name changed memory files instead of pasting them, inject a project only on the owner's own words, and read every decision row.", "pr": 0, "why": "Release for the harness plan 8 hook changes (#15)."}
+{"date": "2026-11-12", "project": "docsic", "summary": "Version 0.7.0: the hooks name changed memory files instead of pasting them, inject a project only on the owner's own words, and read every decision row.", "pr": 16, "why": "Release for the harness plan 8 hook changes (#15)."}

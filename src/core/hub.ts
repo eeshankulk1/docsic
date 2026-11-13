@@ -154,7 +154,8 @@ function memoryMap(hub: Hub, p: HubProject): string[] {
     const docs = readdirSync(join(p.repo, "docs")).filter(f => f.endsWith(".md"));
     if (docs.length) lines.push(`Repo docs (${join(p.repo, "docs")}/): ${docs.join(", ")}`);
   }
-  const rows = parseDecisionRows(readIf(join(dir, "decisions.md"), 131072));
+  // The whole file: rows run oldest first, so a cut would drop the newest, the ones the map shows.
+  const rows = parseDecisionRows(readIf(join(dir, "decisions.md"), Infinity));
   if (rows.length) {
     lines.push(`decisions.md (${rows.length} rows; read the full row before changing what it governs):`);
     // Newest first, within budget: the file keeps every row, recall finds the rest.
